@@ -204,6 +204,10 @@ export class ShelterService {
     return this.shelterRepo.getAllShelters();
   }
 
+  async getShelterById(shelterId: string): Promise<ShelterProjection | null> {
+    return this.shelterRepo.getShelterById(shelterId);
+  }
+
   async getShelterUpdates(shelterId: string): Promise<ShelterUpdateProjection[]> {
     return this.shelterRepo.getShelterUpdates(shelterId);
   }

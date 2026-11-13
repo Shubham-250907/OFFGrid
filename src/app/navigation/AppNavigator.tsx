@@ -3,11 +3,11 @@ import { View, StyleSheet, TouchableOpacity, Text } from 'react-native';
 import { DashboardScreen } from '../../features/dashboard';
 import { TriageScreen } from '../../features/triage';
 import { ChatScreen } from '../../features/chat';
-import { ShelterScreen } from '../../features/shelters';
+import { ShelterScreen, ShelterDetailScreen } from '../../features/shelters';
 import { MeshStatusScreen } from '../../features/mesh-status';
 import { SosModal } from '../../features/sos';
-import { IncidentReportScreen } from '../../features/incidents';
-import { colors, spacing, typography } from '../../theme';
+import { IncidentReportScreen, IncidentDetailScreen } from '../../features/incidents';
+import { colors, typography } from '../../theme';
 
 type Tab = 'Dashboard' | 'Alerts' | 'Chat' | 'Shelters' | 'MeshStatus';
 
@@ -15,28 +15,49 @@ export const AppNavigator: React.FC = () => {
   const [currentTab, setCurrentTab] = useState<Tab>('Dashboard');
   const [sosVisible, setSosVisible] = useState(false);
   const [reportVisible, setReportVisible] = useState(false);
+  const [selectedIncidentId, setSelectedIncidentId] = useState<string | null>(null);
+  const [selectedShelterId, setSelectedShelterId] = useState<string | null>(null);
 
   const renderScreen = () => {
+    // 1. Incident Report Fullscreen Screen
     if (reportVisible) {
       return (
-        <View style={{ flex: 1 }}>
-          <IncidentReportScreen />
-          <TouchableOpacity
-            style={styles.closeOverlayButton}
-            onPress={() => setReportVisible(false)}
-          >
-            <Text style={styles.closeOverlayText}>Back to Map</Text>
-          </TouchableOpacity>
-        </View>
+        <IncidentReportScreen
+          onSuccess={() => setReportVisible(false)}
+          onCancel={() => setReportVisible(false)}
+        />
       );
     }
 
+    // 2. Incident Detail / Verification Screen
+    if (selectedIncidentId) {
+      return (
+        <IncidentDetailScreen
+          incidentId={selectedIncidentId}
+          onBack={() => setSelectedIncidentId(null)}
+        />
+      );
+    }
+
+    // 3. Shelter Detail & Status Updates Screen
+    if (selectedShelterId) {
+      return (
+        <ShelterDetailScreen
+          shelterId={selectedShelterId}
+          onBack={() => setSelectedShelterId(null)}
+        />
+      );
+    }
+
+    // 4. Main Tabs
     switch (currentTab) {
       case 'Dashboard':
         return (
           <DashboardScreen
             onOpenSos={() => setSosVisible(true)}
             onOpenReport={() => setReportVisible(true)}
+            onSelectIncident={(id) => setSelectedIncidentId(id)}
+            onSelectShelter={(id) => setSelectedShelterId(id)}
           />
         );
       case 'Alerts':
@@ -44,10 +65,20 @@ export const AppNavigator: React.FC = () => {
       case 'Chat':
         return <ChatScreen />;
       case 'Shelters':
-        return <ShelterScreen />;
+        return (
+          <ShelterScreen
+            onSelectShelter={(id) => setSelectedShelterId(id)}
+          />
+        );
       case 'MeshStatus':
         return <MeshStatusScreen />;
     }
+  };
+
+  const clearOverlays = () => {
+    setReportVisible(false);
+    setSelectedIncidentId(null);
+    setSelectedShelterId(null);
   };
 
   return (
@@ -56,8 +87,8 @@ export const AppNavigator: React.FC = () => {
 
       <SosModal
         visible={sosVisible}
-        onConfirm={() => setSosVisible(false)}
         onCancel={() => setSosVisible(false)}
+        onSosCreated={() => setSosVisible(false)}
       />
 
       {/* Bottom Navigation Bar */}
@@ -65,7 +96,7 @@ export const AppNavigator: React.FC = () => {
         <TouchableOpacity
           style={[styles.tabItem, currentTab === 'Dashboard' && styles.activeTab]}
           onPress={() => {
-            setReportVisible(false);
+            clearOverlays();
             setCurrentTab('Dashboard');
           }}
           accessibilityRole="tab"
@@ -79,7 +110,7 @@ export const AppNavigator: React.FC = () => {
         <TouchableOpacity
           style={[styles.tabItem, currentTab === 'Alerts' && styles.activeTab]}
           onPress={() => {
-            setReportVisible(false);
+            clearOverlays();
             setCurrentTab('Alerts');
           }}
           accessibilityRole="tab"
@@ -93,7 +124,7 @@ export const AppNavigator: React.FC = () => {
         <TouchableOpacity
           style={[styles.tabItem, currentTab === 'Chat' && styles.activeTab]}
           onPress={() => {
-            setReportVisible(false);
+            clearOverlays();
             setCurrentTab('Chat');
           }}
           accessibilityRole="tab"
@@ -107,7 +138,7 @@ export const AppNavigator: React.FC = () => {
         <TouchableOpacity
           style={[styles.tabItem, currentTab === 'Shelters' && styles.activeTab]}
           onPress={() => {
-            setReportVisible(false);
+            clearOverlays();
             setCurrentTab('Shelters');
           }}
           accessibilityRole="tab"
@@ -121,7 +152,7 @@ export const AppNavigator: React.FC = () => {
         <TouchableOpacity
           style={[styles.tabItem, currentTab === 'MeshStatus' && styles.activeTab]}
           onPress={() => {
-            setReportVisible(false);
+            clearOverlays();
             setCurrentTab('MeshStatus');
           }}
           accessibilityRole="tab"
@@ -170,19 +201,6 @@ const styles = StyleSheet.create({
   },
   activeTabText: {
     color: colors.info,
-    fontWeight: typography.fontWeightBold
-  },
-  closeOverlayButton: {
-    position: 'absolute',
-    top: spacing.md,
-    right: spacing.md,
-    backgroundColor: colors.surfaceElevated,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    borderRadius: 6
-  },
-  closeOverlayText: {
-    color: colors.textPrimary,
     fontWeight: typography.fontWeightBold
   }
 });
