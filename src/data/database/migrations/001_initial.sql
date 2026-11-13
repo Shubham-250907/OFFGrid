@@ -118,7 +118,7 @@ CREATE TABLE IF NOT EXISTS shelter_updates (
   shelter_id TEXT NOT NULL REFERENCES shelters(shelter_id),
   author_public_key TEXT NOT NULL,
   status TEXT NOT NULL,
-  availableCapacity INTEGER,
+  available_capacity INTEGER,
   note TEXT,
   latitude REAL NOT NULL,
   longitude REAL NOT NULL,

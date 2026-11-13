@@ -8,13 +8,13 @@ import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
+import java.security.KeyFactory
 import java.security.KeyPairGenerator
 import java.security.KeyStore
 import java.security.MessageDigest
 import java.security.PublicKey
 import java.security.Signature
 import java.security.spec.ECGenParameterSpec
-import java.security.KeyFactory
 import java.security.spec.X509EncodedKeySpec
 
 class KeystoreModule(reactContext: ReactApplicationContext) :

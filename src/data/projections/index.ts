@@ -1,3 +1,5 @@
+export * from './rebuild';
+
 export interface IncidentProjection {
   incidentId: string;
   eventId: string;
