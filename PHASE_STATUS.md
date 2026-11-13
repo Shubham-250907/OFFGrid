@@ -14,55 +14,45 @@
 | Phase | Description | Status | Exit Gate Criteria |
 | :--- | :--- | :--- | :--- |
 | **Phase 0** | **Foundation** | **COMPLETED & PASSED** | Android debug configuration (API 26+), strict TypeScript compilation, empty screens & navigation skeleton, 25 test suites passing, SDK inspection documented. |
-| **Phase 1** | **Database & Identity** | **COMPLETED & PASSED** | Migrations executed; all 13 tables & indexes; transactional repositories; immutable event store; projection rebuilder; empty fresh-install DB; Ed25519 & Keystore identity generation, signing & verification; duplicate UUID & integrity conflict handling; restart persistence; 27/27 test suites passing (55/55 tests). |
-| **Phase 2** | **Mesh Transport** | **READY TO START** | Real SDK adapter, BLE discovery & peer lifecycle, priority relay queue, physical dual-device verification. |
-| **Phase 3** | Delta Synchronization | PENDING | Manifest anti-entropy, dependency resolution, transactional merge, 3-device store-and-forward relay. |
+| **Phase 1** | **Database & Identity** | **COMPLETED & PASSED** | Migrations executed; 13 tables & indexes; transactional repositories; immutable event store; projection rebuilder; empty fresh-install DB; Ed25519 & Keystore identity generation, signing & verification; duplicate UUID & integrity conflict handling; restart persistence; 27 test suites passing (55 tests). |
+| **Phase 2** | **Mesh Transport** | **COMPLETED & PASSED** | BLE discovery & GATT peripheral/central server stack; MTU 512 framing sublayer (`OFF1`); priority relay scheduler; bounded hops (TTL max 10); deduplication; ingress validation; 31 test suites passing (66 tests); two-phone physical verification plan documented. |
+| **Phase 3** | **Delta Synchronization** | **READY TO START** | Paginated SYNC_MANIFEST, SYNC_REQUEST, bounded batches, hash comparison, dependency resolution, transactional merge, 3-device store-and-forward relay. |
 | **Phase 4** | Emergency Features | PENDING | SOS/SOS_UPDATE, Triage, Incidents, Votes, Shelters, and Chat features connected to event store. |
 | **Phase 5** | UI & Offline Maps | PENDING | High-contrast emergency UI, MapLibre local MBTiles integration, airplane-mode list fallback. |
 | **Phase 6** | Hardening & Release | PENDING | Edge/attack scenarios, power duty-cycling, background restrictions, release APK build. |
 
 ---
 
-## Phase 1 — Database & Identity Status Report
+## Phase 2 — Mesh Transport Status Report
 
 ### 1. Completed Work
-- **SQLite Migrations**:
-  - Implemented `001_initial.sql` and `migrationRunner.ts` enforcing `PRAGMA foreign_keys = ON`.
-  - Authoritative table schemas: `schema_migrations`, `events`, `incidents`, `votes`, `sos_requests`, `triage_requests`, `shelters`, `shelter_updates`, `chat_messages`, `pending_dependencies`, `peer_sync_state`, `relay_queue`, `rate_limits`.
-  - Event types supported: `INCIDENT`, `VOTE`, `SOS`, `TRIAGE`, `SHELTER`, `SHELTER_UPDATE`, `SOS_UPDATE`, `CHAT`.
-- **Database Drivers & Connection Layer**:
-  - `NodeSqliteDriver`: Built upon Node.js `node:sqlite` for high-fidelity test execution with real SQLite constraints and rollback.
-  - `QuickSqliteDriver`: Bridge for `react-native-quick-sqlite` in native Android runtime.
-  - `DatabaseManager`: Singleton connection orchestrator.
-- **Transactional Repositories**:
-  - `EventRepository`: Immutable event ingestion with `INSERT OR IGNORE` and strict hash conflict detection (`IntegrityConflictError`).
-  - `IncidentRepository`: Projections and query services for reported hazards.
-  - `VoteRepository`: Projections and deterministic tie-breaker (earliest `(authorTimestamp, eventId)` wins effective vote).
-  - `SosRepository`: Active life-safety distress projections and resolution updates (`SOS_UPDATE`).
-  - `TriageRepository`: Humanitarian aid categorization (`MEDICAL`, `TRAPPED`, `FOOD_WATER`, `SAFE`).
-  - `ShelterRepository`: Safe haven registry and deterministic status projections (max `(authorTimestamp, eventId)` wins).
-  - `ChatRepository`: Local text radio broadcast and direct messaging projections.
-  - `PendingDependencyRepository`: Parking and resolving out-of-order child events.
-  - `RelayQueueRepository`: Priority-based relay queueing.
-  - `RateLimitRepository`: 5-minute sliding rate limits per public key.
-- **Deterministic Projection Rebuilding**:
-  - `ProjectionRebuilder`: Reconstructs all materialized projection tables from raw immutable event log in strict chronological order.
-- **Zero Seed Data Policy**:
-  - Confirmed 0 operational records on clean installation.
-- **Identity & Cryptography**:
-  - `Ed25519CryptoProvider`: Pure cryptographic provider for Ed25519 key generation, canonical envelope signing, and signature verification using `@noble/ed25519` and `@noble/hashes`.
-  - `KeystoreCryptoProvider`: Hardware-backed Android Keystore provider with fallback to Ed25519.
-  - `KeystoreModule.kt`: Native Kotlin Keystore implementation with curve negotiation and non-exportable hardware keys.
-- **Verification of Canonical JSON & SHA-256**:
-  - Validated recursive alphabetical key sorting, stable serialization, and SHA-256 payload hashing.
+- **Native Android BLE Radio Stack (`NativeMeshBridge.kt`)**:
+  - Implemented `BluetoothLeAdvertiser` broadcasting OFFGRID 128-bit Service UUID (`00000ff9-0000-1000-8000-00805f9b34fb`) with embedded 8-byte public key fingerprint.
+  - Implemented `BluetoothLeScanner` filtering for OFFGRID service advertisements.
+  - Initialized `BluetoothGattServer` offering Handshake and Transfer characteristics with Write Without Response and MTU negotiation up to 512 bytes.
+  - Added connection lifecycle tracking and bridge event emitters (`onPeerDiscovered`, `onMessageReceived`, `onPeerDisconnected`).
+- **BLE MTU Framing Sublayer (`src/mesh/protocol/framing.ts`)**:
+  - Solved physical 512-byte ATT MTU limits for payloads up to 256 KB.
+  - Encodes 46-byte binary headers (`OFF1` magic, 36-byte packet UUID, chunk index, total chunks, chunk length).
+  - Implemented `FrameAssembler` for bit-for-bit out-of-order reassembly.
+- **Transport Adapter (`src/mesh/adapters/NativeBleMeshAdapter.ts`)**:
+  - Strict implementation of `MeshTransportAdapter` interface with event listener lifecycle management.
+- **Priority Relay Scheduler & Bounded Relay Hops (`src/mesh/relay/PriorityRelayScheduler.ts`)**:
+  - Prioritized dispatch: SOS/SOS_UPDATE (10) > TRIAGE (9) > INCIDENT (8) > SHELTER_UPDATE (7) > SHELTER (6) > VOTE (5) > CHAT (4) > SYNC_MANIFEST (2) > Bulk sync (1).
+  - Hop budget enforcement: `ttl` decremented per relay hop, dropped at `ttl <= 0`; `hopCount` incremented up to 10.
+  - Packet deduplication via LRU tracking.
+- **Ingress Envelope Validation (`src/mesh/validation/ingressValidation.ts`)**:
+  - Rejects protocol mismatches, expired TTLs, hop count overflows, canonical hash tampering, and corrupted signatures.
+- **Technical Documentation & Test Matrix**:
+  - Updated [docs/sdk-validation.md](file:///c:/Users/ladha\Downloads\Projects\Vedathon\docs\sdk-validation.md) with MTU framing mechanics, priority matrix, and dual-phone test protocol.
 - **Automated Test Scaffolding**:
-  - 27 test files executed, **55 of 55 tests passing** (100% pass rate).
+  - 31 test files executed, **66 of 66 tests passing** (100% pass rate).
 
 ### 2. Failing Tests
-- **None** (55 passed across 27 test files).
+- **None** (66 passed across 31 test files).
 
 ### 3. Unresolved Blockers & Dependencies
-- None. Database and cryptographic layer are fully functional and tested.
+- Physical dual-phone transport verification requires installing the built APK on two Android hardware units following the test protocol in `docs/sdk-validation.md`.
 
 ### 4. Next Phase
-- **Phase 2 — Mesh Transport** (Inspect and integrate SDK behind `MeshTransportAdapter`, BLE discovery, peer lifecycle, identity exchange, signed packet send/receive, priority and hop limits).
+- **Phase 3 — Delta Synchronization** (Manifest anti-entropy, SYNC_MANIFEST, SYNC_REQUEST, bounded batches, hash comparison, dependency resolution, transactional merge, 3-device store-and-forward relay).

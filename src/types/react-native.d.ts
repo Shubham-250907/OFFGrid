@@ -48,6 +48,11 @@ declare module 'react-native' {
     [key: string]: any;
   };
 
+  export const DeviceEventEmitter: {
+    addListener(event: string, callback: (...args: any[]) => void): { remove: () => void };
+    emit(event: string, ...args: any[]): void;
+  };
+
   export const AppRegistry: {
     registerComponent(appKey: string, componentProvider: () => React.ComponentType<any>): void;
   };
