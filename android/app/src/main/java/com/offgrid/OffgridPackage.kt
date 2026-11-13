@@ -1,10 +1,8 @@
 package com.offgrid
 
-import android.view.View
 import com.facebook.react.ReactPackage
 import com.facebook.react.bridge.NativeModule
 import com.facebook.react.bridge.ReactApplicationContext
-import com.facebook.react.uimanager.ReactShadowNode
 import com.facebook.react.uimanager.ViewManager
 import com.offgrid.crypto.KeystoreModule
 import com.offgrid.location.LocationModule
@@ -22,5 +20,5 @@ class OffgridPackage : ReactPackage {
 
     override fun createViewManagers(
         reactContext: ReactApplicationContext
-    ): List<ViewManager<View, ReactShadowNode<*>>> = emptyList()
+    ): List<ViewManager<*, *>> = emptyList()
 }
