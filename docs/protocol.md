@@ -69,13 +69,51 @@ export interface PacketEnvelope<T> {
 
 ---
 
-## 5. Store-and-Forward Anti-Entropy State Machine
-1. `DISCOVERING`: Periodic BLE duty-cycle listening.
-2. `PEER_CONNECTED`: Radio handshake established.
-3. `AUTHENTICATING`: Exchange public key fingerprints and capability envelopes.
-4. `MANIFEST_EXCHANGE`: Transmit paginated 100-UUID manifest inventories with payload hashes.
-5. `DELTA_COMPARISON`: Compute missing UUIDs vs existing local storage. Detect hash collisions (quarantine if mismatch).
-6. `DELTA_TRANSFER`: Transmit requested packets in priority order up to 256 KB batch limit.
-7. `VALIDATION_AND_MERGE`: Verify signature, validate schemas, insert into `events`, execute transactional projection updates. If parent event missing (e.g. Vote before Incident), park in `pending_dependencies`.
-8. `ACKNOWLEDGEMENT`: Issue durable ACK only after transactional SQLite commit.
-9. `REPEAT_ANTI_ENTROPY`: Continue until catalog divergence is zero or session disconnected.
+## 5. Store-and-Forward Anti-Entropy Protocol
+
+### 5.1 State Machine
+```
+DISCOVERING
+  └─> PEER_CONNECTED
+        └─> AUTHENTICATING
+              └─> MANIFEST_EXCHANGE
+                    └─> DELTA_COMPARISON
+                          └─> DELTA_TRANSFER
+                                └─> VALIDATION_AND_MERGE
+                                      └─> ACKNOWLEDGEMENT
+                                            └─> REPEAT_ANTI_ENTROPY
+                                                  └─> SYNCED_FOR_THIS_PEER_SCOPE
+```
+*Any radio disconnection immediately transitions the state machine to `INTERRUPTED`, triggering resume on next connection.*
+
+### 5.2 Synchronization Procedure
+1. **Peer Discovery**: Devices advertise/scan for OFFGRID BLE Service UUID.
+2. **Authenticated Session**: Devices exchange capability envelopes and public-key fingerprints.
+3. **Manifest Exchange**: Both peers exchange paginated `SYNC_MANIFEST` payloads (100 UUIDs per page) containing event UUIDs, types, entity IDs, payload hashes, and author timestamps.
+4. **Delta Comparison**:
+   - Missing UUIDs are requested.
+   - Matching UUIDs with matching payload hashes are skipped.
+   - Matching UUIDs with mismatched hashes are quarantined as integrity conflicts.
+5. **Delta Request & Transfer**: Peer requests up to 100 missing UUIDs via `SYNC_REQUEST`. Sender responds with bounded batches (up to 100 records and 256 KB). Sender transmits the original author-signed envelopes (relays never re-sign).
+6. **Validation & Dependency Resolution**:
+   - Ingress envelope validated (hash and author signature verified).
+   - If child event arrives before parent (e.g. `VOTE` before `INCIDENT`, `SHELTER_UPDATE` before `SHELTER`), the child event is parked in `pending_dependencies`.
+   - Once parent entity is committed, pending dependencies are automatically unblocked and projected.
+7. **Transactional Merge & Durable ACK**:
+   - Events and projections committed in a single SQLite transaction.
+   - Transport ACK issued only after durable SQLite commit.
+
+---
+
+## 6. Convergence Guarantees and Explicit Assumptions
+
+> [!IMPORTANT]
+> **No Global Synchronization Claim**: OFFGRID does not claim global network convergence. Synchronizations are strictly opportunistic and scoped to directly connected peer interactions (`SYNCED_FOR_THIS_PEER_SCOPE`).
+
+### 6.1 Formal Convergence Assumptions
+1. **Path Availability**: Replicas will converge to the same accepted event set and deterministic projections *if and only if* devices eventually reconnect through a usable path. Permanent network partitions prevent cross-partition convergence.
+2. **Deterministic Tie-Breaking**:
+   - For conflicting community votes from the same public key, the effective vote is chosen deterministically by earliest `(authorTimestamp, eventId)` lexicographical order.
+   - For shelter current status, the projection is chosen deterministically by maximum `(authorTimestamp, eventId)` lexicographical order.
+3. **Evaluation Watermark**: Derived evidence scores (such as Incident Confidence Badge) are recomputed from the accepted event set using a common evaluation watermark timestamp.
+4. **Storage & Retention**: Replicas must have sufficient local storage to retain events until exchanged.
