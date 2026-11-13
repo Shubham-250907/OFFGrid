@@ -105,4 +105,8 @@ export class TriageService {
   async getAllTriage(): Promise<TriageProjection[]> {
     return this.triageRepo.getAllTriage();
   }
+
+  async getTriageById(triageId: string): Promise<TriageProjection | null> {
+    return this.triageRepo.getTriageById(triageId);
+  }
 }

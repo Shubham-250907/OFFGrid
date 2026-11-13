@@ -72,4 +72,29 @@ export class TriageRepository {
       expiresAt: r.expires_at
     }));
   }
+
+  async getTriageById(
+    triageId: string,
+    tx?: DatabaseConnection
+  ): Promise<TriageProjection | null> {
+    const conn = tx ?? this.db;
+    const rows = await conn.query<any>(
+      `SELECT * FROM triage_requests WHERE triage_id = ?;`,
+      [triageId]
+    );
+    if (rows.length === 0) return null;
+    const r = rows[0]!;
+    return {
+      triageId: r.triage_id,
+      eventId: r.event_id,
+      category: r.category,
+      headcount: r.headcount,
+      description: r.description ?? undefined,
+      latitude: r.latitude,
+      longitude: r.longitude,
+      accuracyM: r.accuracy_m,
+      createdAt: r.created_at,
+      expiresAt: r.expires_at
+    };
+  }
 }

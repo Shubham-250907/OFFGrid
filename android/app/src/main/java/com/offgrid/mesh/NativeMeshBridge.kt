@@ -325,6 +325,26 @@ class NativeMeshBridge(reactContext: ReactApplicationContext) :
     }
 
     @ReactMethod
+    fun startForegroundService(promise: Promise) {
+        try {
+            MeshForegroundService.startService(reactApplicationContext)
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("SERVICE_START_ERROR", e.message, e)
+        }
+    }
+
+    @ReactMethod
+    fun stopForegroundService(promise: Promise) {
+        try {
+            MeshForegroundService.stopService(reactApplicationContext)
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("SERVICE_STOP_ERROR", e.message, e)
+        }
+    }
+
+    @ReactMethod
     fun addListener(eventName: String) {}
 
     @ReactMethod

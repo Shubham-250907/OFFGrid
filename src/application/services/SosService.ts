@@ -183,4 +183,8 @@ export class SosService {
   async getActiveSos(): Promise<SosProjection[]> {
     return this.sosRepo.getActiveSos();
   }
+
+  async getSosById(sosId: string): Promise<SosProjection | null> {
+    return this.sosRepo.getSosById(sosId);
+  }
 }
