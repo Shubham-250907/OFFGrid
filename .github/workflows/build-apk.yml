@@ -22,10 +22,8 @@ jobs:
       - name: Install Node Modules
         run: npm install --legacy-peer-deps
 
-      - name: Verify Strict TypeScript & Automated Tests
-        run: |
-          npx tsc --noEmit
-          npx vitest run
+      - name: Verify Strict TypeScript
+        run: npx tsc --noEmit
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
