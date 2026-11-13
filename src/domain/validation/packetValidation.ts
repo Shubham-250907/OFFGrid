@@ -2,8 +2,11 @@ import {
   IncidentPayload,
   VotePayload,
   SOSPayload,
+  SOSUpdatePayload,
   TriagePayload,
   ShelterPayload,
+  ShelterUpdatePayload,
+  ShelterStatus,
   ChatPayload
 } from '../../mesh/protocol/contracts';
 import { LIMITS } from '../../shared/constants/config';
@@ -52,6 +55,15 @@ export function validateSOSPayload(payload: SOSPayload): void {
   }
 }
 
+export function validateSOSUpdatePayload(payload: SOSUpdatePayload): void {
+  if (!payload.updateId || !payload.sosId) {
+    throw new ValidationError('SOS update missing updateId or sosId');
+  }
+  if (payload.status !== 'RESOLVED') {
+    throw new ValidationError(`Invalid SOS update status: ${payload.status}`);
+  }
+}
+
 export function validateTriagePayload(payload: TriagePayload): void {
   if (!payload.triageId) {
     throw new ValidationError('Triage missing triageId');
@@ -82,6 +94,22 @@ export function validateShelterPayload(payload: ShelterPayload): void {
   }
   if (payload.capacity !== undefined && payload.capacity < 0) {
     throw new ValidationError('Shelter capacity cannot be negative');
+  }
+}
+
+export function validateShelterUpdatePayload(payload: ShelterUpdatePayload): void {
+  if (!payload.updateId || !payload.shelterId) {
+    throw new ValidationError('Shelter update missing updateId or shelterId');
+  }
+  const validStatuses: ShelterStatus[] = ['OPEN', 'FULL', 'MEDICAL_AID_AVAILABLE', 'CLOSED', 'UNKNOWN'];
+  if (!validStatuses.includes(payload.status)) {
+    throw new ValidationError(`Invalid shelter update status: ${payload.status}`);
+  }
+  if (payload.availableCapacity !== undefined && payload.availableCapacity < 0) {
+    throw new ValidationError('Available capacity cannot be negative');
+  }
+  if (payload.note && payload.note.length > LIMITS.MAX_DESCRIPTION_CHARS) {
+    throw new ValidationError(`Note exceeds ${LIMITS.MAX_DESCRIPTION_CHARS} characters`);
   }
 }
 

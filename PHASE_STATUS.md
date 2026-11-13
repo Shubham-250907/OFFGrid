@@ -17,44 +17,61 @@
 | **Phase 1** | **Database & Identity** | **COMPLETED & PASSED** | Migrations executed; 13 tables & indexes; transactional repositories; immutable event store; projection rebuilder; empty fresh-install DB; Ed25519 & Keystore identity generation, signing & verification; duplicate UUID & integrity conflict handling; restart persistence; 27 test suites passing (55 tests). |
 | **Phase 2** | **Mesh Transport** | **COMPLETED & PASSED** | BLE discovery & GATT peripheral/central server stack; MTU 512 framing sublayer (`OFF1`); priority relay scheduler; bounded hops (TTL max 10); deduplication; ingress validation; 31 test suites passing (66 tests); two-phone physical verification plan documented. |
 | **Phase 3** | **Delta Synchronization** | **COMPLETED & PASSED** | Paginated SYNC_MANIFEST (100 item boundary), SYNC_REQUEST, bounded batches (max 100 records and 256 KB), hash comparison, parent-child dependency resolution queue (`pending_dependencies`), transactional idempotent merge, durable acknowledgement, 3-device store-and-forward relay verified, 3-replica different-arrival-order property convergence verified; 31 test suites passing (67 tests). |
-| **Phase 4** | **Emergency Features** | **READY TO START** | SOS/SOS_UPDATE, Triage, Incidents, Votes, Shelters, and Chat features connected to event store. |
-| **Phase 5** | UI & Offline Maps | PENDING | High-contrast emergency UI, MapLibre local MBTiles integration, airplane-mode list fallback. |
+| **Phase 4** | **Emergency Features** | **COMPLETED & PASSED** | SOS/SOS_UPDATE, Triage, Incidents, Votes, Shelters, and Chat connected to signed event ledger and live radio broadcast/receive pipeline; GPS & mock rejection; battery retrieval; rate limiting; deterministic proximity weighting & confidence badge thresholds; shelter update ordering; 33 test suites passing (86 tests). |
+| **Phase 5** | UI & Offline Maps | READY TO START | High-contrast emergency UI, MapLibre local MBTiles integration, airplane-mode list fallback. |
 | **Phase 6** | Hardening & Release | PENDING | Edge/attack scenarios, power duty-cycling, background restrictions, release APK build. |
 
 ---
 
-## Phase 3 — Delta Synchronization Status Report
+## Phase 4 — Emergency Features Status Report
 
 ### 1. Completed Work
-- **Paginated Manifest Exchange (`src/mesh/sync/DeltaSyncService.ts`)**:
-  - Implemented `createManifest`: chunks inventory into pages of 100 entries (`LIMITS.MANIFEST_PAGE_SIZE = 100`).
-  - Computes canonical `inventoryHash` using SHA-256 over inventory items (`eventId`, `eventType`, `entityId`, `payloadHash`, `authorTimestamp`).
-  - Manages cursor-based pagination with `hasMore` flags.
-- **Delta Comparison & Missing UUID Detection**:
-  - Implemented `computeDelta`: evaluates remote manifest inventory against local event store.
-  - Automatically classifies events into missing UUIDs to request, matching UUIDs with identical hashes (skipped), and matching UUIDs with divergent hashes (flagged as integrity conflicts).
-- **Bounded Request & Response Transport Frames**:
-  - `createSyncRequest`: requests up to 100 explicit UUIDs.
-  - `createSyncResponse`: packages original author-signed envelopes up to 100 records and 256 KB (`LIMITS.MAX_SERIALIZED_BATCH_BYTES`). Relays never re-sign origin events.
-- **Out-of-Order Dependency Resolution**:
-  - If child events arrive before parents (e.g. `VOTE` before `INCIDENT`, `SHELTER_UPDATE` before `SHELTER`), events are durably saved with `validation_status = 'PENDING_DEPENDENCY'` and queued in `pending_dependencies`.
-  - Upon parent event arrival and commit, pending dependencies are automatically retrieved, verified, projected, and promoted to `VALID`.
-- **Transactional Idempotent Merge & Durable ACK**:
-  - Merges incoming batch inside a database transaction (`INSERT OR IGNORE`).
-  - Durable acknowledgment issued only after SQLite transaction commit.
-  - Records sync status in `peer_sync_state` as `SYNCED_FOR_THIS_PEER_SCOPE`.
-- **Three-Device Store-and-Forward Relay**:
-  - Verified in `tests/integration/store-forward.test.ts`: Device A generates signed incident; Device C relays event while Device A is disconnected; Device B accepts, validates Device A's signature, and projects the incident identically.
-- **Three-Replica Different-Arrival-Order Convergence**:
-  - Verified in `tests/integration/convergence.test.ts`: Three separate SQLite replicas fed with identical event sets in different permutations (child-before-parent, reverse order, duplicate events) converge to the exact same accepted event set, effective votes, confidence score, and shelter status.
-- **Convergence Assumptions & Scope Documentation**:
-  - Documented conditional convergence invariants in `docs/protocol.md` (Section 6). No claim of global network synchronization; scope is strictly local and per-connected-peer (`SYNCED_FOR_THIS_PEER_SCOPE`).
+- **SOS & SOS_UPDATE Domain Services (`src/application/services/SosService.ts`)**:
+  - One-tap distress creation with live GPS coordinates, battery level integration via `NativeBatteryService`, headcount (1..1000), optional message (<= 250 chars).
+  - Explicit handling for unavailable GPS without falling back to stale cached coordinates.
+  - Signed canonical envelope generation and local persistence before radio transmission (Priority 10).
+  - Signed `SOS_UPDATE` resolution event transitioning state to `RESOLVED`.
+- **Incident Reporting & Location Verification (`src/application/services/IncidentService.ts`)**:
+  - Geolocated hazard reporting across standard categories (`FLOOD`, `ROAD_BLOCKAGE`, `EARTHQUAKE_DAMAGE`, `FIRE`, `LANDSLIDE`, `STRUCTURAL_DANGER`, `OTHER`).
+  - Strict mock-location detection (`isMock`) throwing `MockLocationRejectedError`.
+  - GPS accuracy verification: requires non-mock GPS coordinates with accuracy <= 50m for proximity eligibility (`ValidationError`).
+  - 5-minute sliding rate limit per public key/device enforced via `RateLimitRepository` (`RateLimitExceededError`).
+  - Broadcasts at Priority 8.
+- **Community Verification Voting & Confidence Score (`src/application/services/VoteService.ts`)**:
+  - One effective vote per public key per incident enforced deterministically by earliest `(authorTimestamp, eventId)` lexicographic tuple.
+  - Recomputes confidence evidence score:
+    - Haversine distance and effective distance $d_e = d + (a_r + a_v)/2$.
+    - Step function proximity weights: $P(d_e) = 1.00$ ($d_e < 200$m), $0.25$ ($200\text{m} \le d_e < 1000$m), $0.00$ ($d_e \ge 1000$m).
+    - Half-life time decay $T(t) = 2^{-(t - t_0)/H}$ with $H = 6$ hours.
+    - Deterministic confidence evidence score $C = S / \max(1, W) \in [-1, 1]$.
+    - Badge state machine: `HIGH_CONFIDENCE` ($C \ge 0.60$ and $\ge 3$ proximate keys), `DISPUTED` ($C \le -0.25$ and $\ge 1$ proximate dispute), `UNVERIFIED` (all other states).
+  - Broadcasts at Priority 5.
+- **Humanitarian Triage Coordination (`src/application/services/TriageService.ts`)**:
+  - Support for `MEDICAL`, `TRAPPED`, `FOOD_WATER`, and `SAFE` categories.
+  - Headcount validation (1..1000), optional description (<= 500 chars).
+  - Mock-location rejection; priority 9 broadcast.
+- **Dynamic Emergency Shelter Pins & Status Projections (`src/application/services/ShelterService.ts`)**:
+  - Shelter registration with name, description, capacity, status (`OPEN`, `FULL`, `MEDICAL_AID_AVAILABLE`, `CLOSED`, `UNKNOWN`), and valid GPS.
+  - Append-only `SHELTER_UPDATE` events broadcast at Priority 7.
+  - Deterministic current status projection: update with maximum `(authorTimestamp, eventId)` tuple wins.
+  - Complete update history retained in `shelter_updates`.
+- **Local Mesh Chat (`src/application/services/ChatService.ts`)**:
+  - Broadcast and direct messaging up to 2,000 characters at Priority 4.
+  - Local persistence before transmission with `PENDING` delivery state.
+  - Plaintext relay disclosure documented and enforced.
+- **Live Radio Message Ingress Dispatcher (`src/application/services/MeshReceiverService.ts`)**:
+  - Subscribes to `transport.onMessageReceived`.
+  - Parses canonical envelopes, verifies signatures, checks dependencies, commits to SQLite, and updates live projections.
+  - Verified cross-device synchronization between two independent nodes in `tests/integration/live-mesh-sync.test.ts`.
+- **Hardware Integrations (`src/battery/BatteryService.ts` & `src/location/LocationService.ts`)**:
+  - Kotlin `BatteryModule` and `LocationModule` exposed through clean TypeScript service wrappers.
+  - Physical multi-device test plan documented in `docs/device-test-matrix.md`.
 
 ### 2. Failing Tests
-- **None** (67 passed across 31 test files).
+- **None** (86 passed across 33 test files; 0 TypeScript errors).
 
 ### 3. Unresolved Blockers & Dependencies
-- None. Delta synchronization engine passes all property and integration tests.
+- None. Emergency domain services, cryptographic envelopes, validation rules, mock location rejection, and synchronization pass all acceptance gates.
 
 ### 4. Next Phase
-- **Phase 4 — Emergency Features** (Implement domain use cases connecting SOS, SOS_UPDATE, Triage, Incidents, Votes, Shelters, and Chat directly to the signed event ledger and anti-entropy sync).
+- **Phase 5 — UI & Offline Maps** (Wire screens to application services, MapLibre local MBTiles vector map loader, airplane mode fallback, UI state binding).

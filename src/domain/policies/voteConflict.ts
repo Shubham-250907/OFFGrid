@@ -5,6 +5,9 @@ export interface StoredVote {
   voteType: 'CONFIRM' | 'DISPUTE';
   authorTimestamp: number;
   eventId: string;
+  latitude?: number;
+  longitude?: number;
+  accuracyM?: number;
 }
 
 /**

@@ -16,7 +16,7 @@ export interface MeshTransportAdapter {
   broadcast(payload: Uint8Array, priority: number): Promise<void>;
   onPeerDiscovered(cb: (peer: MeshPeer) => void): () => void;
   onMessageReceived(
-    cb: (peerId: string, payload: Uint8Array) => void
+    cb: (peerId: string, payload: Uint8Array) => void | Promise<void>
   ): () => void;
   onPeerDisconnected(cb: (peerId: string) => void): () => void;
 }
