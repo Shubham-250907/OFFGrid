@@ -12,7 +12,10 @@ export const MeshStatusScreen: React.FC = () => {
   const [isLoading, setIsLoading] = useState<boolean>(true);
 
   const loadMeshStats = useCallback(async () => {
-    if (!services) return;
+    if (!services) {
+      setIsLoading(false);
+      return;
+    }
     setIsLoading(true);
 
     try {

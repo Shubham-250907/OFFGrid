@@ -128,6 +128,16 @@ export const IncidentReportScreen: React.FC<IncidentReportScreenProps> = ({
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       <View style={styles.header}>
+        {onCancel && (
+          <TouchableOpacity
+            style={styles.topBackButton}
+            onPress={onCancel}
+            accessibilityRole="button"
+            accessibilityLabel="Go back"
+          >
+            <Text style={styles.topBackButtonText}>← Back</Text>
+          </TouchableOpacity>
+        )}
         <Text style={styles.title}>Report Hazard Incident</Text>
         <Text style={styles.subtitle}>
           Broadcasts a geolocated hazard to nearby peers. Requires valid non-mock GPS ≤ 50m.
@@ -292,6 +302,21 @@ const styles = StyleSheet.create({
   },
   header: {
     marginBottom: spacing.md
+  },
+  topBackButton: {
+    alignSelf: 'flex-start',
+    paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.sm,
+    backgroundColor: colors.surfaceElevated,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: colors.border,
+    marginBottom: spacing.sm
+  },
+  topBackButtonText: {
+    color: colors.info,
+    fontWeight: typography.fontWeightBold,
+    fontSize: typography.fontSizeSm
   },
   title: {
     fontSize: typography.fontSizeXl,

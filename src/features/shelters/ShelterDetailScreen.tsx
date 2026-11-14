@@ -47,7 +47,10 @@ export const ShelterDetailScreen: React.FC<ShelterDetailScreenProps> = ({
   const [updateError, setUpdateError] = useState<string | null>(null);
 
   const loadData = useCallback(async () => {
-    if (!services) return;
+    if (!services) {
+      setIsLoading(false);
+      return;
+    }
     setIsLoading(true);
 
     try {

@@ -40,8 +40,14 @@ class OffgridSqliteModule(private val reactContext: ReactApplicationContext) :
                         stmt.bindDouble(index, d)
                     }
                 }
-                ReadableType.String -> stmt.bindString(index, params.getString(i))
-                else -> stmt.bindString(index, params.getString(i))
+                ReadableType.String -> {
+                    val s = params.getString(i)
+                    if (s != null) stmt.bindString(index, s) else stmt.bindNull(index)
+                }
+                else -> {
+                    val s = params.getString(i)
+                    if (s != null) stmt.bindString(index, s) else stmt.bindNull(index)
+                }
             }
         }
     }

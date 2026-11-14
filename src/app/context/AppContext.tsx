@@ -183,7 +183,7 @@ export const AppContextProvider: React.FC<AppContextProviderProps> = ({
 
         const locationService = new NativeLocationService();
         const batteryService = new NativeBatteryService();
-        const transport = new NativeBleMeshAdapter();
+        const transport = new NativeBleMeshAdapter(id.keyId);
         const deltaSyncService = new DeltaSyncService(db, crypto);
         const meshReceiver = new MeshReceiverService(transport, deltaSyncService);
 
@@ -192,6 +192,18 @@ export const AppContextProvider: React.FC<AppContextProviderProps> = ({
         } catch (meshErr) {
           console.warn('Mesh receiver startup notice:', meshErr);
         }
+
+        // Non-blocking initialization of Bluetooth mesh advertising & scanning
+        try {
+          transport
+            .initialize()
+            .then(() => {
+              transport.startDiscovery().catch(() => {});
+            })
+            .catch((bleErr) => {
+              console.warn('BLE mesh transport notice:', bleErr);
+            });
+        } catch {}
 
         const sosService = new SosService(db, crypto, transport, batteryService);
         const incidentService = new IncidentService(db, crypto, transport);

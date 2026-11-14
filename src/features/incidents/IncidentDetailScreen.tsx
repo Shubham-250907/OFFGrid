@@ -33,7 +33,10 @@ export const IncidentDetailScreen: React.FC<IncidentDetailScreenProps> = ({
   const [voteError, setVoteError] = useState<string | null>(null);
 
   const loadData = useCallback(async () => {
-    if (!services || !identity) return;
+    if (!services || !identity) {
+      setIsLoading(false);
+      return;
+    }
     setIsLoading(true);
 
     try {

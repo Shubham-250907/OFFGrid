@@ -10,7 +10,8 @@ export class OffgridSqliteDriver implements DatabaseConnection {
     if (!OffgridSqlite) {
       throw new Error('OffgridSqlite native module is not available');
     }
-    const res = await OffgridSqlite.execute(sql, params);
+    const cleanParams = params.map((p) => (p === undefined ? null : p));
+    const res = await OffgridSqlite.execute(sql, cleanParams);
     return {
       rowsAffected: res?.rowsAffected ?? 0,
       insertId: res?.insertId
@@ -21,7 +22,8 @@ export class OffgridSqliteDriver implements DatabaseConnection {
     if (!OffgridSqlite) {
       throw new Error('OffgridSqlite native module is not available');
     }
-    const rows = await OffgridSqlite.query(sql, params);
+    const cleanParams = params.map((p) => (p === undefined ? null : p));
+    const rows = await OffgridSqlite.query(sql, cleanParams);
     return (rows ?? []) as T[];
   }
 
