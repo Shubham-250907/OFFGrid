@@ -406,7 +406,6 @@ class NativeMeshBridge(reactContext: ReactApplicationContext) :
                 value: ByteArray?
             ) {
                 try {
-                    descriptor.value = value
                     if (responseNeeded) {
                         gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, value)
                     }
@@ -422,14 +421,6 @@ class NativeMeshBridge(reactContext: ReactApplicationContext) :
                 } catch (e: Exception) {
                     android.util.Log.w("OFFGRID_BLE", "serverCallback onDescriptorWriteRequest notice: ${e.message}")
                 }
-            }
-
-            override fun onNotificationSent(device: BluetoothDevice, status: Int) {
-                android.util.Log.i("OFFGRID_BLE", "GATT server: notification sent to ${device.address}, status=$status")
-            }
-
-            override fun onExecuteWrite(device: BluetoothDevice, requestId: Int, execute: Boolean) {
-                gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, null)
             }
         }
 
@@ -712,10 +703,6 @@ class NativeMeshBridge(reactContext: ReactApplicationContext) :
                     sendEvent("onPeerDiscovered", peerMap)
                 }
 
-                override fun onCharacteristicWrite(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
-                    android.util.Log.i("OFFGRID_BLE", "Characteristic write completed with status=$status")
-                }
-
                 override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
                     try {
                         val value = characteristic.value
@@ -796,12 +783,8 @@ class NativeMeshBridge(reactContext: ReactApplicationContext) :
                 val characteristic = service?.getCharacteristic(CHARACTERISTIC_TRANSFER)
                 if (characteristic != null) {
                     characteristic.value = rawBytes
-                    val success = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                        gattServer?.notifyCharacteristicChanged(clientDevice, characteristic, false, rawBytes) == 0
-                    } else {
-                        @Suppress("DEPRECATION")
-                        gattServer?.notifyCharacteristicChanged(clientDevice, characteristic, false) == true
-                    }
+                    @Suppress("DEPRECATION")
+                    val success = gattServer?.notifyCharacteristicChanged(clientDevice, characteristic, false) == true
                     android.util.Log.i("OFFGRID_BLE", "send: notified connectedClient $peerId: $success")
                     promise.resolve(success)
                     return
@@ -855,13 +838,8 @@ class NativeMeshBridge(reactContext: ReactApplicationContext) :
                     characteristic.value = rawBytes
                     for ((_, clientDevice) in connectedClients) {
                         try {
-                            val ok = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                                server.notifyCharacteristicChanged(clientDevice, characteristic, false, rawBytes) == 0
-                            } else {
-                                @Suppress("DEPRECATION")
-                                server.notifyCharacteristicChanged(clientDevice, characteristic, false)
-                            }
-                            if (ok) {
+                            @Suppress("DEPRECATION")
+                            if (server.notifyCharacteristicChanged(clientDevice, characteristic, false)) {
                                 sentCount++
                             }
                         } catch (_: Exception) {}

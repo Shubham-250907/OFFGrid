@@ -63,7 +63,7 @@ jobs:
         run: |
           cd android
           chmod +x gradlew
-          ./gradlew :app:processReleaseResources :app:assembleRelease --stacktrace
+          ./gradlew :app:processReleaseResources :app:assembleRelease --stacktrace --info
 
       - name: Upload Release APK
         uses: actions/upload-artifact@v4
