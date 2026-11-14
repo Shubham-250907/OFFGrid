@@ -56,6 +56,7 @@ export const AppNavigator: React.FC = () => {
           <DashboardScreen
             onOpenSos={() => setSosVisible(true)}
             onOpenReport={() => setReportVisible(true)}
+            onOpenAddShelter={() => setCurrentTab('Shelters')}
             onSelectIncident={(id) => setSelectedIncidentId(id)}
             onSelectShelter={(id) => setSelectedShelterId(id)}
           />

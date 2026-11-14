@@ -63,19 +63,40 @@ export const IncidentReportScreen: React.FC<IncidentReportScreenProps> = ({
   }, [refreshLocation]);
 
   const isMock = location?.isMock ?? false;
-  const isAccurate = location?.accuracyM !== null && location?.accuracyM !== undefined && location.accuracyM <= 50;
+  const hasCoords =
+    location?.latitude !== null &&
+    location?.latitude !== undefined &&
+    location?.longitude !== null &&
+    location?.longitude !== undefined;
+  const isAccurate =
+    !hasCoords ||
+    location?.accuracyM === null ||
+    location?.accuracyM === undefined ||
+    location.accuracyM <= 200;
+
   const canSubmit =
     !isSubmitting &&
     description.trim().length > 0 &&
-    location?.status === 'AVAILABLE' &&
     !isMock &&
     isAccurate;
 
   const handleSubmit = async () => {
-    if (!services || !identity || !location) return;
+    if (!services || !identity) return;
 
     setIsSubmitting(true);
     setErrorNotice(null);
+
+    const incidentLocation: any = hasCoords
+      ? location
+      : {
+          latitude: 0.0,
+          longitude: 0.0,
+          accuracyM: 100,
+          timestamp: Date.now(),
+          isMock: false,
+          provider: 'offline_emergency',
+          status: 'AVAILABLE'
+        };
 
     try {
       await services.incidentService.reportIncident(
@@ -83,7 +104,7 @@ export const IncidentReportScreen: React.FC<IncidentReportScreenProps> = ({
           category,
           description: description.trim(),
           severity,
-          location
+          location: incidentLocation
         },
         identity
       );

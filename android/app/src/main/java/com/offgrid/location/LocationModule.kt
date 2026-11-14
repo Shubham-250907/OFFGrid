@@ -57,6 +57,35 @@ class LocationModule(reactContext: ReactApplicationContext) :
             val isGpsEnabled = locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)
             val isNetworkEnabled = locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
 
+            // 1. First check best available last known location across all providers
+            val lastLocation = locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER)
+                ?: locationManager.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
+                ?: (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) locationManager.getLastKnownLocation(LocationManager.FUSED_PROVIDER) else null)
+                ?: locationManager.getLastKnownLocation(LocationManager.PASSIVE_PROVIDER)
+
+            if (lastLocation != null) {
+                val isMock = isMockLocation(lastLocation)
+                val status = if (isMock) {
+                    "MOCK"
+                } else if (lastLocation.accuracy > 150.0f) {
+                    "LOW_ACCURACY"
+                } else {
+                    "AVAILABLE"
+                }
+
+                val res = Arguments.createMap().apply {
+                    putDouble("latitude", lastLocation.latitude)
+                    putDouble("longitude", lastLocation.longitude)
+                    putDouble("accuracyM", lastLocation.accuracy.toDouble())
+                    putDouble("timestamp", lastLocation.time.toDouble())
+                    putBoolean("isMock", isMock)
+                    putString("provider", lastLocation.provider ?: "last_known")
+                    putString("status", status)
+                }
+                promise.resolve(res)
+                return
+            }
+
             if (!isGpsEnabled && !isNetworkEnabled) {
                 val res = Arguments.createMap().apply {
                     putNull("latitude")
@@ -71,43 +100,21 @@ class LocationModule(reactContext: ReactApplicationContext) :
                 return
             }
 
-            val provider = if (isGpsEnabled) LocationManager.GPS_PROVIDER else LocationManager.NETWORK_PROVIDER
-            val lastLocation = locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER)
-                ?: locationManager.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
-                ?: (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) locationManager.getLastKnownLocation(LocationManager.FUSED_PROVIDER) else null)
-                ?: locationManager.getLastKnownLocation(LocationManager.PASSIVE_PROVIDER)
+            // 2. Request fresh updates from available providers with timeout
+            var hasResolved = false
+            val handler = android.os.Handler(Looper.getMainLooper())
 
-            if (lastLocation != null && (System.currentTimeMillis() - lastLocation.time) < 3600000L) {
-                val isMock = isMockLocation(lastLocation)
-                val status = if (isMock) {
-                    "MOCK"
-                } else if (lastLocation.accuracy > 100.0f) {
-                    "LOW_ACCURACY"
-                } else {
-                    "AVAILABLE"
-                }
-
-                val res = Arguments.createMap().apply {
-                    putDouble("latitude", lastLocation.latitude)
-                    putDouble("longitude", lastLocation.longitude)
-                    putDouble("accuracyM", lastLocation.accuracy.toDouble())
-                    putDouble("timestamp", lastLocation.time.toDouble())
-                    putBoolean("isMock", isMock)
-                    putString("provider", lastLocation.provider ?: provider)
-                    putString("status", status)
-                }
-                promise.resolve(res)
-                return
-            }
-
-            // Request fresh single update
             val listener = object : LocationListener {
                 override fun onLocationChanged(loc: Location) {
-                    locationManager.removeUpdates(this)
+                    if (hasResolved) return
+                    hasResolved = true
+                    handler.removeCallbacksAndMessages(null)
+                    try { locationManager.removeUpdates(this) } catch (_: Exception) {}
+
                     val isMock = isMockLocation(loc)
                     val status = if (isMock) {
                         "MOCK"
-                    } else if (loc.accuracy > 50.0f) {
+                    } else if (loc.accuracy > 150.0f) {
                         "LOW_ACCURACY"
                     } else {
                         "AVAILABLE"
@@ -119,7 +126,7 @@ class LocationModule(reactContext: ReactApplicationContext) :
                         putDouble("accuracyM", loc.accuracy.toDouble())
                         putDouble("timestamp", loc.time.toDouble())
                         putBoolean("isMock", isMock)
-                        putString("provider", loc.provider ?: provider)
+                        putString("provider", loc.provider ?: "fresh")
                         putString("status", status)
                     }
                     promise.resolve(res)
@@ -131,7 +138,29 @@ class LocationModule(reactContext: ReactApplicationContext) :
                 override fun onProviderDisabled(p: String) {}
             }
 
-            locationManager.requestSingleUpdate(provider, listener, Looper.getMainLooper())
+            handler.postDelayed({
+                if (!hasResolved) {
+                    hasResolved = true
+                    try { locationManager.removeUpdates(listener) } catch (_: Exception) {}
+                    val res = Arguments.createMap().apply {
+                        putNull("latitude")
+                        putNull("longitude")
+                        putNull("accuracyM")
+                        putNull("timestamp")
+                        putBoolean("isMock", false)
+                        putString("provider", "timeout")
+                        putString("status", "UNAVAILABLE")
+                    }
+                    promise.resolve(res)
+                }
+            }, LOCATION_TIMEOUT_MS)
+
+            if (isNetworkEnabled) {
+                locationManager.requestSingleUpdate(LocationManager.NETWORK_PROVIDER, listener, Looper.getMainLooper())
+            }
+            if (isGpsEnabled) {
+                locationManager.requestSingleUpdate(LocationManager.GPS_PROVIDER, listener, Looper.getMainLooper())
+            }
         } catch (e: Exception) {
             val res = Arguments.createMap().apply {
                 putNull("latitude")

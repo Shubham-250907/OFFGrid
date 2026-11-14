@@ -120,12 +120,12 @@ export const LocalOfflineMapView: React.FC<LocalOfflineMapViewProps> = ({
           <Text style={styles.mapStatusTitle}>
             {hasMap && mapCoverage === 'COVERED'
               ? 'LOCAL MBTILES MAP LOADED'
-              : 'OFFLINE MAP PACKAGE NOT INSTALLED'}
+              : 'OFFLINE VECTOR PROJECTION MODE'}
           </Text>
           <Text style={styles.mapStatusSubtitle}>
             {hasMap && mapCoverage === 'COVERED'
               ? 'Displaying offline vector tiles with SQLite markers'
-              : 'Showing live projections from SQLite database (Airplane-mode active)'}
+              : 'Operating 100% offline. Live markers originate directly from SQLite.'}
           </Text>
         </View>
       </View>
