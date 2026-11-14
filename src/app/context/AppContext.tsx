@@ -226,9 +226,33 @@ export const AppContextProvider: React.FC<AppContextProviderProps> = ({
 
         transport.onPeerDisconnected(() => {
           if (active) {
-            setPeerCount((prev) => Math.max(0, prev - 1));
+            setPeerCount((prev) => {
+              const updated = Math.max(0, prev - 1);
+              if (updated === 0) {
+                setMeshState('SEARCHING');
+              }
+              return updated;
+            });
           }
         });
+
+        // Listen to BLE gateway status transitions (Phase 1)
+        if (typeof transport.onStatusChanged === 'function') {
+          transport.onStatusChanged((event) => {
+            if (!active) return;
+            androidLog: console.log('[OFFGRID_BLE] Gateway status transition received in AppContext:', event.status);
+            if (event.status === 'BLUETOOTH_DISABLED') {
+              setMeshState('BT_OFF');
+            } else if (event.status === 'PERMISSION_REQUIRED' || event.status === 'PERMISSION_DENIED') {
+              setMeshState('PERM_REQ');
+            } else if (event.status === 'BLUETOOTH_UNAVAILABLE') {
+              setMeshState('NO_BLE');
+            } else if (event.status === 'READY') {
+              setMeshState((prev) => (prev === 'BT_OFF' || prev === 'PERM_REQ' || prev === 'NO_BLE' ? 'SEARCHING' : prev));
+              transport.startDiscovery().catch(() => {});
+            }
+          });
+        }
 
         // Trigger screen re-renders when emergency packets arrive
         meshReceiver.onEventReceived(() => {

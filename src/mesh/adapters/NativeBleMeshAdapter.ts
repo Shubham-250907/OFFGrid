@@ -1,5 +1,5 @@
 import { NativeModules, DeviceEventEmitter } from 'react-native';
-import { MeshPeer, MeshTransportAdapter } from './MeshTransportAdapter';
+import { MeshPeer, MeshTransportAdapter, GatewayStatus, GatewayStatusEvent } from './MeshTransportAdapter';
 import { splitIntoFrames, FrameAssembler } from '../protocol/framing';
 import { toBase64, fromBase64, generateUuid } from '../../shared/utils';
 
@@ -7,7 +7,9 @@ export class NativeBleMeshAdapter implements MeshTransportAdapter {
   private peerDiscoveredListeners = new Set<(peer: MeshPeer) => void>();
   private messageReceivedListeners = new Set<(peerId: string, payload: Uint8Array) => void>();
   private peerDisconnectedListeners = new Set<(peerId: string) => void>();
+  private statusChangedListeners = new Set<(event: GatewayStatusEvent) => void>();
 
+  private currentStatus: GatewayStatus = 'INITIALIZING';
   private frameAssembler = new FrameAssembler();
   private nativeBridge = NativeModules.NativeMeshBridge;
   private isNativeAvailable: boolean;
@@ -21,7 +23,20 @@ export class NativeBleMeshAdapter implements MeshTransportAdapter {
   }
 
   private setupListeners(): void {
-    if (this.isNativeAvailable && DeviceEventEmitter) {
+    if (DeviceEventEmitter) {
+      DeviceEventEmitter.addListener('onGatewayStatusChanged', (event: GatewayStatusEvent) => {
+        try {
+          if (event?.status) {
+            this.currentStatus = event.status;
+          }
+          for (const cb of this.statusChangedListeners) {
+            cb(event);
+          }
+        } catch (err) {
+          console.warn('Notice in onGatewayStatusChanged handler:', err);
+        }
+      });
+
       DeviceEventEmitter.addListener('onPeerDiscovered', (peer: MeshPeer) => {
         try {
           for (const cb of this.peerDiscoveredListeners) {
@@ -68,8 +83,35 @@ export class NativeBleMeshAdapter implements MeshTransportAdapter {
 
   async initialize(): Promise<void> {
     if (this.isNativeAvailable) {
-      await this.nativeBridge.initialize(this.localPublicKeyFingerprint);
+      try {
+        const res = await this.nativeBridge.initialize(this.localPublicKeyFingerprint);
+        if (res?.status) {
+          this.currentStatus = res.status;
+        }
+      } catch (err) {
+        console.warn('[OFFGRID_BLE] Gateway initialization notice:', err);
+        this.currentStatus = 'ERROR';
+      }
+    } else {
+      this.currentStatus = 'READY';
     }
+  }
+
+  async getStatus(): Promise<GatewayStatus> {
+    if (this.isNativeAvailable && typeof this.nativeBridge.getGatewayStatus === 'function') {
+      try {
+        const res = await this.nativeBridge.getGatewayStatus();
+        if (res?.status) {
+          this.currentStatus = res.status;
+        }
+      } catch {}
+    }
+    return this.currentStatus;
+  }
+
+  onStatusChanged(cb: (event: GatewayStatusEvent) => void): () => void {
+    this.statusChangedListeners.add(cb);
+    return () => this.statusChangedListeners.delete(cb);
   }
 
   async startDiscovery(): Promise<void> {

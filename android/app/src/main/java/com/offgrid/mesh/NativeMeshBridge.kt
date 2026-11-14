@@ -1,5 +1,6 @@
 package com.offgrid.mesh
 
+import android.Manifest
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
@@ -21,10 +22,18 @@ import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.content.pm.PackageManager
+import android.location.LocationManager
+import android.os.Build
 import android.os.ParcelUuid
 import android.util.Base64
+import androidx.core.content.ContextCompat
 import com.facebook.react.bridge.Arguments
+import com.facebook.react.bridge.LifecycleEventListener
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
@@ -35,7 +44,7 @@ import java.util.concurrent.ConcurrentHashMap
 
 @SuppressLint("MissingPermission")
 class NativeMeshBridge(reactContext: ReactApplicationContext) :
-    ReactContextBaseJavaModule(reactContext) {
+    ReactContextBaseJavaModule(reactContext), LifecycleEventListener {
 
     companion object {
         const val NAME = "NativeMeshBridge"
@@ -44,6 +53,16 @@ class NativeMeshBridge(reactContext: ReactApplicationContext) :
         val SERVICE_UUID: UUID = UUID.fromString("00000ff9-0000-1000-8000-00805f9b34fb")
         val CHARACTERISTIC_HANDSHAKE: UUID = UUID.fromString("00000ff1-0000-1000-8000-00805f9b34fb")
         val CHARACTERISTIC_TRANSFER: UUID = UUID.fromString("00000ff2-0000-1000-8000-00805f9b34fb")
+    }
+
+    enum class GatewayStatus {
+        INITIALIZING,
+        READY,
+        BLUETOOTH_DISABLED,
+        PERMISSION_REQUIRED,
+        PERMISSION_DENIED,
+        BLUETOOTH_UNAVAILABLE,
+        ERROR
     }
 
     private val bluetoothManager: BluetoothManager? =
@@ -60,6 +79,25 @@ class NativeMeshBridge(reactContext: ReactApplicationContext) :
 
     private var localPublicKeyFingerprint: String = "OFFGRID"
 
+    @Volatile
+    private var currentStatus: GatewayStatus = GatewayStatus.INITIALIZING
+
+    @Volatile
+    private var isInitialized = false
+
+    @Volatile
+    private var isDiscoveryActive = false
+
+    @Volatile
+    private var wasDiscoveryActiveBeforeDisable = false
+
+    private var bluetoothStateReceiver: BroadcastReceiver? = null
+    private var isReceiverRegistered = false
+
+    init {
+        reactContext.addLifecycleEventListener(this)
+    }
+
     override fun getName(): String = NAME
 
     private fun sendEvent(eventName: String, params: Any?) {
@@ -74,19 +112,189 @@ class NativeMeshBridge(reactContext: ReactApplicationContext) :
         }
     }
 
-    @ReactMethod
-    fun initialize(publicKeyFingerprint: String, promise: Promise) {
-        if (bluetoothAdapter == null || !bluetoothAdapter.isEnabled) {
-            promise.reject("BLUETOOTH_DISABLED", "Bluetooth adapter is disabled or unavailable")
-            return
+    private fun updateStatus(newStatus: GatewayStatus, reason: String? = null) {
+        val previous = currentStatus
+        currentStatus = newStatus
+        android.util.Log.i("OFFGRID_BLE", "Gateway status: ${previous.name} -> ${newStatus.name} (reason: $reason)")
+
+        val map = Arguments.createMap().apply {
+            putString("status", newStatus.name)
+            putString("previousStatus", previous.name)
+            if (reason != null) {
+                putString("reason", reason)
+            }
+            putBoolean("isBluetoothEnabled", bluetoothAdapter?.isEnabled == true)
+            putDouble("timestamp", System.currentTimeMillis().toDouble())
+        }
+        sendEvent("onGatewayStatusChanged", map)
+    }
+
+    private fun checkPermissionsAndAvailability(): GatewayStatus {
+        if (bluetoothAdapter == null) {
+            return GatewayStatus.BLUETOOTH_UNAVAILABLE
         }
 
-        localPublicKeyFingerprint = publicKeyFingerprint
-        advertiser = bluetoothAdapter.bluetoothLeAdvertiser
-        scanner = bluetoothAdapter.bluetoothLeScanner
+        val context = reactApplicationContext
 
-        setupGattServer()
-        promise.resolve(true)
+        // Check Android 12+ (API 31+) permissions
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val scanGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED
+            val connectGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
+            val advertiseGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_ADVERTISE) == PackageManager.PERMISSION_GRANTED
+
+            if (!scanGranted || !connectGranted || !advertiseGranted) {
+                return GatewayStatus.PERMISSION_REQUIRED
+            }
+        } else {
+            // Android 8 to 11 (API 26-30): requires Location permission for BLE scanning
+            val fineLocGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+            if (!fineLocGranted) {
+                return GatewayStatus.PERMISSION_REQUIRED
+            }
+
+            // Check if device Location Services are turned on (mandatory for BLE scan on Android <= 30)
+            val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
+            val isLocationEnabled = locationManager?.isProviderEnabled(LocationManager.GPS_PROVIDER) == true ||
+                                    locationManager?.isProviderEnabled(LocationManager.NETWORK_PROVIDER) == true
+            if (!isLocationEnabled) {
+                return GatewayStatus.PERMISSION_REQUIRED
+            }
+        }
+
+        if (!bluetoothAdapter.isEnabled) {
+            return GatewayStatus.BLUETOOTH_DISABLED
+        }
+
+        return GatewayStatus.READY
+    }
+
+    private synchronized fun registerBluetoothStateReceiver() {
+        if (isReceiverRegistered) return
+        bluetoothStateReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                if (intent?.action == BluetoothAdapter.ACTION_STATE_CHANGED) {
+                    val state = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR)
+                    handleBluetoothAdapterStateChange(state)
+                }
+            }
+        }
+        val filter = IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED)
+        try {
+            reactApplicationContext.registerReceiver(bluetoothStateReceiver, filter)
+            isReceiverRegistered = true
+            android.util.Log.i("OFFGRID_BLE", "Registered ACTION_STATE_CHANGED receiver successfully.")
+        } catch (e: Exception) {
+            android.util.Log.e("OFFGRID_BLE", "Failed to register Bluetooth state receiver", e)
+        }
+    }
+
+    private synchronized fun unregisterBluetoothStateReceiver() {
+        if (!isReceiverRegistered || bluetoothStateReceiver == null) return
+        try {
+            reactApplicationContext.unregisterReceiver(bluetoothStateReceiver)
+            android.util.Log.i("OFFGRID_BLE", "Unregistered ACTION_STATE_CHANGED receiver.")
+        } catch (_: Exception) {}
+        bluetoothStateReceiver = null
+        isReceiverRegistered = false
+    }
+
+    private fun handleBluetoothAdapterStateChange(state: Int) {
+        when (state) {
+            BluetoothAdapter.STATE_TURNING_OFF -> {
+                android.util.Log.i("OFFGRID_BLE", "Bluetooth state: TURNING_OFF. Halting active BLE operations.")
+                wasDiscoveryActiveBeforeDisable = isDiscoveryActive
+                stopBleOperations()
+                updateStatus(GatewayStatus.BLUETOOTH_DISABLED, "Bluetooth turning off")
+            }
+            BluetoothAdapter.STATE_OFF -> {
+                android.util.Log.i("OFFGRID_BLE", "Bluetooth state: OFF.")
+                stopBleOperations()
+                updateStatus(GatewayStatus.BLUETOOTH_DISABLED, "Bluetooth disabled")
+            }
+            BluetoothAdapter.STATE_TURNING_ON -> {
+                android.util.Log.i("OFFGRID_BLE", "Bluetooth state: TURNING_ON.")
+                updateStatus(GatewayStatus.INITIALIZING, "Bluetooth enabling")
+            }
+            BluetoothAdapter.STATE_ON -> {
+                android.util.Log.i("OFFGRID_BLE", "Bluetooth state: ON. Restoring gateway components.")
+                advertiser = bluetoothAdapter?.bluetoothLeAdvertiser
+                scanner = bluetoothAdapter?.bluetoothLeScanner
+                setupGattServer()
+
+                val newStatus = checkPermissionsAndAvailability()
+                updateStatus(newStatus, "Bluetooth turned on")
+
+                if (newStatus == GatewayStatus.READY && wasDiscoveryActiveBeforeDisable) {
+                    android.util.Log.i("OFFGRID_BLE", "Auto-resuming discovery after Bluetooth re-enabled.")
+                    startAdvertisingInternal()
+                    startScanningInternal()
+                    isDiscoveryActive = true
+                }
+            }
+        }
+    }
+
+    private fun stopBleOperations() {
+        try {
+            advertiser?.stopAdvertising(object : AdvertiseCallback() {})
+        } catch (_: Exception) {}
+        try {
+            scanner?.stopScan(object : ScanCallback() {})
+        } catch (_: Exception) {}
+
+        isDiscoveryActive = false
+        connectingAddresses.clear()
+
+        // Disconnect and close existing client GATTs safely
+        for ((peerId, gatt) in clientGatts) {
+            try {
+                gatt.disconnect()
+                gatt.close()
+            } catch (_: Exception) {}
+        }
+        clientGatts.clear()
+        connectedClients.clear()
+    }
+
+    @ReactMethod
+    fun initialize(publicKeyFingerprint: String, promise: Promise) {
+        try {
+            localPublicKeyFingerprint = publicKeyFingerprint
+            registerBluetoothStateReceiver()
+
+            val status = checkPermissionsAndAvailability()
+            updateStatus(status, "initialize called")
+
+            if (status == GatewayStatus.READY) {
+                advertiser = bluetoothAdapter?.bluetoothLeAdvertiser
+                scanner = bluetoothAdapter?.bluetoothLeScanner
+                setupGattServer()
+                isInitialized = true
+            }
+
+            val result = Arguments.createMap().apply {
+                putString("status", status.name)
+                putBoolean("isBluetoothEnabled", bluetoothAdapter?.isEnabled == true)
+                putBoolean("isInitialized", isInitialized)
+            }
+            promise.resolve(result)
+        } catch (e: Exception) {
+            android.util.Log.e("OFFGRID_BLE", "Failed during gateway initialization", e)
+            updateStatus(GatewayStatus.ERROR, e.message)
+            promise.reject("INITIALIZE_ERROR", e.message, e)
+        }
+    }
+
+    @ReactMethod
+    fun getGatewayStatus(promise: Promise) {
+        val status = checkPermissionsAndAvailability()
+        val result = Arguments.createMap().apply {
+            putString("status", status.name)
+            putBoolean("isBluetoothEnabled", bluetoothAdapter?.isEnabled == true)
+            putBoolean("isInitialized", isInitialized)
+            putBoolean("isDiscoveryActive", isDiscoveryActive)
+        }
+        promise.resolve(result)
     }
 
     private fun setupGattServer() {
@@ -143,33 +351,47 @@ class NativeMeshBridge(reactContext: ReactApplicationContext) :
             }
         }
 
-        gattServer = bluetoothManager.openGattServer(reactApplicationContext, serverCallback)
-        val service = BluetoothGattService(SERVICE_UUID, BluetoothGattService.SERVICE_TYPE_PRIMARY)
+        try {
+            gattServer = bluetoothManager.openGattServer(reactApplicationContext, serverCallback)
+            val service = BluetoothGattService(SERVICE_UUID, BluetoothGattService.SERVICE_TYPE_PRIMARY)
 
-        val handshakeChar = BluetoothGattCharacteristic(
-            CHARACTERISTIC_HANDSHAKE,
-            BluetoothGattCharacteristic.PROPERTY_READ or BluetoothGattCharacteristic.PROPERTY_WRITE,
-            BluetoothGattCharacteristic.PERMISSION_READ or BluetoothGattCharacteristic.PERMISSION_WRITE
-        )
+            val handshakeChar = BluetoothGattCharacteristic(
+                CHARACTERISTIC_HANDSHAKE,
+                BluetoothGattCharacteristic.PROPERTY_READ or BluetoothGattCharacteristic.PROPERTY_WRITE,
+                BluetoothGattCharacteristic.PERMISSION_READ or BluetoothGattCharacteristic.PERMISSION_WRITE
+            )
 
-        val transferChar = BluetoothGattCharacteristic(
-            CHARACTERISTIC_TRANSFER,
-            BluetoothGattCharacteristic.PROPERTY_WRITE or BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE or BluetoothGattCharacteristic.PROPERTY_NOTIFY,
-            BluetoothGattCharacteristic.PERMISSION_WRITE
-        )
+            val transferChar = BluetoothGattCharacteristic(
+                CHARACTERISTIC_TRANSFER,
+                BluetoothGattCharacteristic.PROPERTY_WRITE or BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE or BluetoothGattCharacteristic.PROPERTY_NOTIFY,
+                BluetoothGattCharacteristic.PERMISSION_WRITE
+            )
 
-        service.addCharacteristic(handshakeChar)
-        service.addCharacteristic(transferChar)
-        gattServer?.addService(service)
+            service.addCharacteristic(handshakeChar)
+            service.addCharacteristic(transferChar)
+            gattServer?.addService(service)
+            android.util.Log.i("OFFGRID_BLE", "GATT server registered primary mesh service.")
+        } catch (e: Exception) {
+            android.util.Log.e("OFFGRID_BLE", "Failed to setup GATT server", e)
+        }
     }
 
     @ReactMethod
     fun startDiscovery(promise: Promise) {
         try {
+            val status = checkPermissionsAndAvailability()
+            if (status != GatewayStatus.READY) {
+                updateStatus(status, "startDiscovery rejected")
+                promise.reject("GATEWAY_NOT_READY", "Gateway cannot start discovery in state: ${status.name}")
+                return
+            }
+
             startAdvertisingInternal()
             startScanningInternal()
+            isDiscoveryActive = true
             promise.resolve(true)
         } catch (e: Exception) {
+            android.util.Log.e("OFFGRID_BLE", "startDiscovery error", e)
             promise.reject("DISCOVERY_ERROR", e.message, e)
         }
     }
@@ -256,6 +478,8 @@ class NativeMeshBridge(reactContext: ReactApplicationContext) :
         try {
             advertiser?.stopAdvertising(object : AdvertiseCallback() {})
             scanner?.stopScan(object : ScanCallback() {})
+            isDiscoveryActive = false
+            wasDiscoveryActiveBeforeDisable = false
             promise.resolve(true)
         } catch (e: Exception) {
             promise.reject("STOP_DISCOVERY_ERROR", e.message, e)
@@ -470,4 +694,37 @@ class NativeMeshBridge(reactContext: ReactApplicationContext) :
 
     @ReactMethod
     fun removeListeners(count: Int) {}
+
+    // LifecycleEventListener implementation
+    override fun onHostResume() {
+        val newStatus = checkPermissionsAndAvailability()
+        if (newStatus != currentStatus) {
+            updateStatus(newStatus, "Host resumed")
+            if (newStatus == GatewayStatus.READY && isInitialized) {
+                advertiser = bluetoothAdapter?.bluetoothLeAdvertiser
+                scanner = bluetoothAdapter?.bluetoothLeScanner
+                setupGattServer()
+                if (wasDiscoveryActiveBeforeDisable) {
+                    startAdvertisingInternal()
+                    startScanningInternal()
+                    isDiscoveryActive = true
+                }
+            }
+        }
+    }
+
+    override fun onHostPause() {
+        // Maintain mesh discovery in background
+    }
+
+    override fun onHostDestroy() {
+        android.util.Log.i("OFFGRID_BLE", "NativeMeshBridge onHostDestroy - releasing native resources.")
+        unregisterBluetoothStateReceiver()
+        stopBleOperations()
+        try {
+            gattServer?.close()
+        } catch (_: Exception) {}
+        gattServer = null
+        isInitialized = false
+    }
 }

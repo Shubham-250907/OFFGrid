@@ -6,6 +6,23 @@ export interface MeshPeer {
   discoveredAt: number;
 }
 
+export type GatewayStatus =
+  | 'INITIALIZING'
+  | 'READY'
+  | 'BLUETOOTH_DISABLED'
+  | 'PERMISSION_REQUIRED'
+  | 'PERMISSION_DENIED'
+  | 'BLUETOOTH_UNAVAILABLE'
+  | 'ERROR';
+
+export interface GatewayStatusEvent {
+  status: GatewayStatus;
+  previousStatus?: GatewayStatus;
+  reason?: string;
+  isBluetoothEnabled?: boolean;
+  timestamp: number;
+}
+
 export interface MeshTransportAdapter {
   initialize(): Promise<void>;
   startDiscovery(): Promise<void>;
@@ -19,4 +36,6 @@ export interface MeshTransportAdapter {
     cb: (peerId: string, payload: Uint8Array) => void | Promise<void>
   ): () => void;
   onPeerDisconnected(cb: (peerId: string) => void): () => void;
+  onStatusChanged?(cb: (event: GatewayStatusEvent) => void): () => void;
+  getStatus?(): Promise<GatewayStatus>;
 }

@@ -1,4 +1,4 @@
-import { MeshPeer, MeshTransportAdapter } from './MeshTransportAdapter';
+import { MeshPeer, MeshTransportAdapter, GatewayStatus, GatewayStatusEvent } from './MeshTransportAdapter';
 import { NativeBleMeshAdapter } from './NativeBleMeshAdapter';
 import { CloudRelayTransportAdapter } from './CloudRelayTransportAdapter';
 
@@ -141,5 +141,19 @@ export class CompositeMeshAdapter implements MeshTransportAdapter {
   onPeerDisconnected(cb: (peerId: string) => void): () => void {
     this.peerDisconnectedListeners.add(cb);
     return () => this.peerDisconnectedListeners.delete(cb);
+  }
+
+  onStatusChanged(cb: (event: GatewayStatusEvent) => void): () => void {
+    if (typeof this.bleAdapter.onStatusChanged === 'function') {
+      return this.bleAdapter.onStatusChanged(cb);
+    }
+    return () => {};
+  }
+
+  async getStatus(): Promise<GatewayStatus> {
+    if (typeof this.bleAdapter.getStatus === 'function') {
+      return this.bleAdapter.getStatus();
+    }
+    return 'READY';
   }
 }
