@@ -2,6 +2,8 @@ import React, { createContext, useContext, useState, useEffect, useCallback } fr
 import { DatabaseConnection } from '../../data/database/connection';
 import { NodeSqliteDriver } from '../../data/database/nodeSqliteDriver';
 import { QuickSqliteDriver } from '../../data/database/quickSqliteDriver';
+import { OffgridSqliteDriver } from '../../data/database/offgridSqliteDriver';
+import { InMemorySqliteDriver } from '../../data/database/inMemorySqliteDriver';
 import { runMigrations } from '../../data/database/migrations/migrationRunner';
 import { CryptoProvider, DeviceIdentity } from '../../security/identity/DeviceIdentity';
 import { Ed25519CryptoProvider } from '../../security/identity/Ed25519CryptoProvider';
@@ -143,16 +145,22 @@ export const AppContextProvider: React.FC<AppContextProviderProps> = ({
           }
         }
 
-        // Initialize SQLite driver (QuickSqlite on native Android, NodeSqlite in test/fallback)
+        // Initialize SQLite driver (OffgridSqlite on native Android, NodeSqlite in test/Node, InMemorySqlite fallback)
         let db: DatabaseConnection;
         try {
-          if (NativeModules.QuickSqlite) {
+          if (NativeModules.OffgridSqlite) {
+            db = new OffgridSqliteDriver();
+          } else if (NativeModules.QuickSqlite) {
             db = new QuickSqliteDriver('offgrid.db');
           } else {
-            db = new NodeSqliteDriver(':memory:');
+            try {
+              db = new NodeSqliteDriver(':memory:');
+            } catch {
+              db = new InMemorySqliteDriver();
+            }
           }
         } catch {
-          db = new NodeSqliteDriver(':memory:');
+          db = new InMemorySqliteDriver();
         }
 
         try {

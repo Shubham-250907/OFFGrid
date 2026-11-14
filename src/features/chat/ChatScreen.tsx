@@ -25,7 +25,10 @@ export const ChatScreen: React.FC = () => {
   const [errorNotice, setErrorNotice] = useState<string | null>(null);
 
   const loadMessages = useCallback(async () => {
-    if (!services) return;
+    if (!services) {
+      setIsLoading(false);
+      return;
+    }
     setIsLoading(true);
 
     try {

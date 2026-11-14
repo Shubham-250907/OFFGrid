@@ -44,7 +44,10 @@ export const ShelterScreen: React.FC<ShelterScreenProps> = ({ onSelectShelter })
   const [errorNotice, setErrorNotice] = useState<string | null>(null);
 
   const loadShelters = useCallback(async () => {
-    if (!services) return;
+    if (!services) {
+      setIsLoading(false);
+      return;
+    }
     setIsLoading(true);
 
     try {

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -43,24 +43,31 @@ export const IncidentReportScreen: React.FC<IncidentReportScreenProps> = ({
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [errorNotice, setErrorNotice] = useState<string | null>(null);
 
+  const fetchGps = useCallback(async () => {
+    setIsAcquiringGps(true);
+    try {
+      const loc = await refreshLocation();
+      setLocation(loc);
+    } catch {
+      // Ignore
+    } finally {
+      setIsAcquiringGps(false);
+    }
+  }, [refreshLocation]);
+
   useEffect(() => {
     let active = true;
-    async function acquireGps() {
-      setIsAcquiringGps(true);
-      try {
-        const loc = await refreshLocation();
-        if (active) setLocation(loc);
-      } catch {
-        // Ignore
-      } finally {
-        if (active) setIsAcquiringGps(false);
-      }
-    }
-    acquireGps();
+    const maxTimer = setTimeout(() => {
+      if (active) setIsAcquiringGps(false);
+    }, 2500);
+
+    fetchGps();
+
     return () => {
       active = false;
+      clearTimeout(maxTimer);
     };
-  }, [refreshLocation]);
+  }, [fetchGps]);
 
   const isMock = location?.isMock ?? false;
   const hasCoords =
@@ -150,6 +157,16 @@ export const IncidentReportScreen: React.FC<IncidentReportScreenProps> = ({
               Current GPS accuracy is ±{Math.round(location?.accuracyM ?? 999)}m. Hazard reports require
               accuracy ≤ 50m to qualify for community proximity verification.
             </Text>
+          </View>
+        ) : !hasCoords ? (
+          <View style={styles.accuracyAlert}>
+            <Text style={styles.accuracyAlertTitle}>ℹ️ SATELLITE GPS UNAVAILABLE (INDOORS)</Text>
+            <Text style={styles.accuracyAlertBody}>
+              Operating indoors or under cover. Hazard report will be broadcast using emergency offline coordinates.
+            </Text>
+            <TouchableOpacity style={styles.retryGpsButton} onPress={fetchGps}>
+              <Text style={styles.retryGpsText}>🔄 Retry Satellite GPS</Text>
+            </TouchableOpacity>
           </View>
         ) : (
           <View style={styles.gpsLockedRow}>
@@ -342,6 +359,21 @@ const styles = StyleSheet.create({
   accuracyAlertBody: {
     color: colors.textPrimary,
     fontSize: typography.fontSizeXs
+  },
+  retryGpsButton: {
+    marginTop: spacing.xs,
+    paddingVertical: 4,
+    paddingHorizontal: spacing.sm,
+    backgroundColor: colors.surfaceElevated,
+    borderRadius: 4,
+    alignSelf: 'flex-start',
+    borderWidth: 1,
+    borderColor: colors.border
+  },
+  retryGpsText: {
+    color: colors.info,
+    fontSize: typography.fontSizeXs,
+    fontWeight: typography.fontWeightBold
   },
   gpsLockedRow: {
     backgroundColor: colors.surfaceElevated,

@@ -8,6 +8,7 @@ import com.offgrid.crypto.KeystoreModule
 import com.offgrid.location.LocationModule
 import com.offgrid.battery.BatteryModule
 import com.offgrid.mesh.NativeMeshBridge
+import com.offgrid.db.OffgridSqliteModule
 
 class OffgridPackage : ReactPackage {
     override fun createNativeModules(reactContext: ReactApplicationContext): List<NativeModule> =
@@ -15,7 +16,8 @@ class OffgridPackage : ReactPackage {
             KeystoreModule(reactContext),
             LocationModule(reactContext),
             BatteryModule(reactContext),
-            NativeMeshBridge(reactContext)
+            NativeMeshBridge(reactContext),
+            OffgridSqliteModule(reactContext)
         )
 
     override fun createViewManagers(

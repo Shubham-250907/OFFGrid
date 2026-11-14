@@ -1,13 +1,18 @@
-import { DatabaseSync } from 'node:sqlite';
 import { DatabaseConnection, QueryResult } from './connection';
 
 export class NodeSqliteDriver implements DatabaseConnection {
-  private db: DatabaseSync;
+  private db: any;
   private inTransaction = false;
 
   constructor(filename = ':memory:') {
-    this.db = new DatabaseSync(filename);
-    this.db.exec('PRAGMA foreign_keys = ON;');
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const { DatabaseSync } = require('node:sqlite');
+      this.db = new DatabaseSync(filename);
+      this.db.exec('PRAGMA foreign_keys = ON;');
+    } catch (err: any) {
+      throw new Error(`NodeSqliteDriver unavailable: ${err?.message ?? 'node:sqlite not found'}`);
+    }
   }
 
   async execute(sql: string, params: unknown[] = []): Promise<QueryResult> {
@@ -49,6 +54,8 @@ export class NodeSqliteDriver implements DatabaseConnection {
   }
 
   async close(): Promise<void> {
-    this.db.close();
+    if (this.db && typeof this.db.close === 'function') {
+      this.db.close();
+    }
   }
 }
