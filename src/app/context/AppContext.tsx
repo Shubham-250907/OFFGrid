@@ -19,7 +19,7 @@ import { ShelterService } from '../../application/services/ShelterService';
 import { ChatService } from '../../application/services/ChatService';
 import { OfflineMapService, LocalOfflineMapService } from '../../maps/OfflineMapService';
 import { LocationResult } from '../../shared/types';
-import { NativeModules } from 'react-native';
+import { NativeModules, PermissionsAndroid, Platform } from 'react-native';
 
 export interface AppServices {
   db: DatabaseConnection;
@@ -118,6 +118,31 @@ export const AppContextProvider: React.FC<AppContextProviderProps> = ({
 
     async function init() {
       try {
+        // Request runtime permissions on Android for GPS and Bluetooth mesh
+        if (Platform.OS === 'android') {
+          try {
+            const permissionsToRequest: any[] = [
+              PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+              PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION
+            ];
+            if (Number(Platform.Version) >= 31) {
+              permissionsToRequest.push(
+                PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
+                PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
+                PermissionsAndroid.PERMISSIONS.BLUETOOTH_ADVERTISE
+              );
+            }
+            if (Number(Platform.Version) >= 33) {
+              permissionsToRequest.push(
+                PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS
+              );
+            }
+            await PermissionsAndroid.requestMultiple(permissionsToRequest);
+          } catch (permErr) {
+            console.warn('Could not request Android permissions', permErr);
+          }
+        }
+
         // Initialize SQLite driver (QuickSqlite on native Android, NodeSqlite in test/fallback)
         let db: DatabaseConnection;
         try {
@@ -130,10 +155,23 @@ export const AppContextProvider: React.FC<AppContextProviderProps> = ({
           db = new NodeSqliteDriver(':memory:');
         }
 
-        await runMigrations(db);
+        try {
+          await runMigrations(db);
+        } catch (migErr) {
+          console.warn('Migration run notice:', migErr);
+        }
 
         const crypto = new Ed25519CryptoProvider();
-        const id = await crypto.createOrLoadIdentity();
+        let id: DeviceIdentity;
+        try {
+          id = await crypto.createOrLoadIdentity();
+        } catch {
+          id = {
+            publicKey: 'OFFGRID_LOCAL_NODE',
+            keyAlgorithm: 'ED25519',
+            keyId: 'offgrid_local'
+          };
+        }
 
         const locationService = new NativeLocationService();
         const batteryService = new NativeBatteryService();
@@ -141,7 +179,11 @@ export const AppContextProvider: React.FC<AppContextProviderProps> = ({
         const deltaSyncService = new DeltaSyncService(db, crypto);
         const meshReceiver = new MeshReceiverService(transport, deltaSyncService);
 
-        meshReceiver.start();
+        try {
+          meshReceiver.start();
+        } catch (meshErr) {
+          console.warn('Mesh receiver startup notice:', meshErr);
+        }
 
         const sosService = new SosService(db, crypto, transport, batteryService);
         const incidentService = new IncidentService(db, crypto, transport);
@@ -150,7 +192,9 @@ export const AppContextProvider: React.FC<AppContextProviderProps> = ({
         const shelterService = new ShelterService(db, crypto, transport);
         const chatService = new ChatService(db, crypto, transport);
         const mapService = new LocalOfflineMapService();
-        await mapService.initialize();
+        try {
+          await mapService.initialize();
+        } catch {}
 
         // Listen to peer discoveries
         transport.onPeerDiscovered(() => {

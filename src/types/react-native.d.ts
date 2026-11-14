@@ -104,4 +104,17 @@ declare module 'react-native' {
   export const AppRegistry: {
     registerComponent(appKey: string, componentProvider: () => React.ComponentType<any>): void;
   };
+
+  export const Platform: {
+    OS: 'ios' | 'android' | 'windows' | 'macos' | 'web';
+    Version: number | string;
+  };
+
+  export const PermissionsAndroid: {
+    PERMISSIONS: Record<string, string>;
+    RESULTS: Record<string, string>;
+    request(permission: string, rationale?: any): Promise<string>;
+    requestMultiple(permissions: string[]): Promise<Record<string, string>>;
+    check(permission: string): Promise<boolean>;
+  };
 }

@@ -72,13 +72,16 @@ class LocationModule(reactContext: ReactApplicationContext) :
             }
 
             val provider = if (isGpsEnabled) LocationManager.GPS_PROVIDER else LocationManager.NETWORK_PROVIDER
-            val lastLocation = locationManager.getLastKnownLocation(provider)
+            val lastLocation = locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER)
+                ?: locationManager.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
+                ?: (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) locationManager.getLastKnownLocation(LocationManager.FUSED_PROVIDER) else null)
+                ?: locationManager.getLastKnownLocation(LocationManager.PASSIVE_PROVIDER)
 
-            if (lastLocation != null && (System.currentTimeMillis() - lastLocation.time) < 15000) {
+            if (lastLocation != null && (System.currentTimeMillis() - lastLocation.time) < 3600000L) {
                 val isMock = isMockLocation(lastLocation)
                 val status = if (isMock) {
                     "MOCK"
-                } else if (lastLocation.accuracy > 50.0f) {
+                } else if (lastLocation.accuracy > 100.0f) {
                     "LOW_ACCURACY"
                 } else {
                     "AVAILABLE"

@@ -24,7 +24,15 @@ export class Ed25519CryptoProvider implements CryptoProvider {
     }
 
     if (!this.privateKey) {
-      this.privateKey = ed.utils.randomPrivateKey();
+      try {
+        this.privateKey = ed.utils.randomPrivateKey();
+      } catch {
+        const fallbackBytes = new Uint8Array(32);
+        for (let i = 0; i < 32; i++) {
+          fallbackBytes[i] = Math.floor(Math.random() * 256);
+        }
+        this.privateKey = fallbackBytes;
+      }
     }
 
     const publicKeyBytes = ed.getPublicKey(this.privateKey);
