@@ -177,15 +177,22 @@ class NativeMeshBridge(reactContext: ReactApplicationContext) :
             .setIncludeDeviceName(false)
             .setIncludeTxPowerLevel(false)
             .addServiceUuid(pUuid)
+            .build()
+
+        val scanResponse = AdvertiseData.Builder()
             .addServiceData(pUuid, localPublicKeyFingerprint.take(8).toByteArray(Charsets.UTF_8))
             .build()
 
         val callback = object : AdvertiseCallback() {
-            override fun onStartSuccess(settingsInEffect: AdvertiseSettings?) {}
-            override fun onStartFailure(errorCode: Int) {}
+            override fun onStartSuccess(settingsInEffect: AdvertiseSettings?) {
+                android.util.Log.i("OFFGRID_BLE", "BLE advertising started successfully")
+            }
+            override fun onStartFailure(errorCode: Int) {
+                android.util.Log.e("OFFGRID_BLE", "BLE advertising failed with code $errorCode")
+            }
         }
 
-        advertiser?.startAdvertising(settings, data, callback)
+        advertiser?.startAdvertising(settings, data, scanResponse, callback)
     }
 
     private fun startScanningInternal() {

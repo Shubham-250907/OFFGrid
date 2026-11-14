@@ -4,7 +4,7 @@
  */
 
 const FRAME_MAGIC = new Uint8Array([0x4F, 0x46, 0x46, 0x31]); // 'OFF1'
-export const DEFAULT_CHUNK_SIZE = 460; // Safe payload size below 512 MTU with header overhead
+export const DEFAULT_CHUNK_SIZE = 180; // Safe payload size below 512 MTU with header overhead
 
 export interface FrameHeader {
   magic: string;

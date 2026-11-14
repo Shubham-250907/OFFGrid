@@ -92,7 +92,7 @@ export const ChatScreen: React.FC = () => {
 
         <View style={styles.bubbleFooter}>
           <Text style={styles.stateTag}>
-            {item.deliveryState === 'PENDING' ? '⏳ Queued for radio' : '✓ Relayed'}
+            {isSelf ? '✓ Transmitted to mesh' : '✓ Received from peer'}
           </Text>
           {item.messageType === 'DIRECT' && (
             <Text style={styles.directTag}>[DIRECT]</Text>

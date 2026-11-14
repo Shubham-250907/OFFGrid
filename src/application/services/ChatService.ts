@@ -89,11 +89,7 @@ export class ChatService {
     // 3. Radio transmission at priority 4
     const serialized = new TextEncoder().encode(JSON.stringify(envelope));
     try {
-      if (input.recipientPublicKey) {
-        await this.transport.broadcast(serialized, PACKET_PRIORITY.CHAT);
-      } else {
-        await this.transport.broadcast(serialized, PACKET_PRIORITY.CHAT);
-      }
+      await this.transport.broadcast(serialized, PACKET_PRIORITY.CHAT);
     } catch (e) {
       console.warn('Chat transmission queued', e);
     }
