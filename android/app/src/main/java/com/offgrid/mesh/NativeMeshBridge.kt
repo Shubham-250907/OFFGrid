@@ -206,7 +206,8 @@ class NativeMeshBridge(reactContext: ReactApplicationContext) :
         prefs.edit().putBoolean("has_requested_perms", true).apply()
     }
 
-    private synchronized fun registerBluetoothStateReceiver() {
+    @Synchronized
+    private fun registerBluetoothStateReceiver() {
         if (isReceiverRegistered) return
         bluetoothStateReceiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
@@ -226,7 +227,8 @@ class NativeMeshBridge(reactContext: ReactApplicationContext) :
         }
     }
 
-    private synchronized fun unregisterBluetoothStateReceiver() {
+    @Synchronized
+    private fun unregisterBluetoothStateReceiver() {
         if (!isReceiverRegistered || bluetoothStateReceiver == null) return
         try {
             reactApplicationContext.unregisterReceiver(bluetoothStateReceiver)
@@ -271,7 +273,8 @@ class NativeMeshBridge(reactContext: ReactApplicationContext) :
         }
     }
 
-    private synchronized fun stopBleOperations() {
+    @Synchronized
+    private fun stopBleOperations() {
         activeAdvertiseCallback?.let {
             try {
                 advertiser?.stopAdvertising(it)
@@ -483,7 +486,8 @@ class NativeMeshBridge(reactContext: ReactApplicationContext) :
         }
     }
 
-    private synchronized fun startAdvertisingInternal() {
+    @Synchronized
+    private fun startAdvertisingInternal() {
         val permStatus = checkOperationPermission("advertise")
         if (permStatus != GatewayStatus.READY && permStatus != GatewayStatus.BLUETOOTH_DISABLED) {
             android.util.Log.w("OFFGRID_BLE", "Cannot start advertising: permission status is ${permStatus.name}")
@@ -532,7 +536,8 @@ class NativeMeshBridge(reactContext: ReactApplicationContext) :
         advertiser?.startAdvertising(settings, data, scanResponse, callback)
     }
 
-    private synchronized fun startScanningInternal() {
+    @Synchronized
+    private fun startScanningInternal() {
         val permStatus = checkOperationPermission("scan")
         if (permStatus != GatewayStatus.READY && permStatus != GatewayStatus.BLUETOOTH_DISABLED) {
             android.util.Log.w("OFFGRID_BLE", "Cannot start scanning: permission status is ${permStatus.name}")
