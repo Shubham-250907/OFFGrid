@@ -23,26 +23,43 @@ export class NativeBleMeshAdapter implements MeshTransportAdapter {
   private setupListeners(): void {
     if (this.isNativeAvailable && DeviceEventEmitter) {
       DeviceEventEmitter.addListener('onPeerDiscovered', (peer: MeshPeer) => {
-        for (const cb of this.peerDiscoveredListeners) {
-          cb(peer);
+        try {
+          for (const cb of this.peerDiscoveredListeners) {
+            cb(peer);
+          }
+        } catch (err) {
+          console.warn('Notice in onPeerDiscovered handler:', err);
         }
       });
 
       DeviceEventEmitter.addListener('onPeerDisconnected', ({ peerId }: { peerId: string }) => {
-        for (const cb of this.peerDisconnectedListeners) {
-          cb(peerId);
+        try {
+          for (const cb of this.peerDisconnectedListeners) {
+            cb(peerId);
+          }
+        } catch (err) {
+          console.warn('Notice in onPeerDisconnected handler:', err);
         }
       });
 
       DeviceEventEmitter.addListener(
         'onMessageReceived',
         ({ peerId, payload }: { peerId: string; payload: string }) => {
-          const frameBytes = fromBase64(payload);
-          const assembled = this.frameAssembler.ingestFrame(frameBytes);
-          if (assembled) {
-            for (const cb of this.messageReceivedListeners) {
-              cb(peerId, assembled.payload);
+          try {
+            if (!payload) return;
+            const frameBytes = fromBase64(payload);
+            const assembled = this.frameAssembler.ingestFrame(frameBytes);
+            if (assembled) {
+              for (const cb of this.messageReceivedListeners) {
+                try {
+                  cb(peerId, assembled.payload);
+                } catch (cbErr) {
+                  console.warn('Notice in message listener:', cbErr);
+                }
+              }
             }
+          } catch (err) {
+            console.warn('Notice in onMessageReceived frame processing:', err);
           }
         }
       );

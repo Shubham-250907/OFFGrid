@@ -70,3 +70,73 @@ export function fromBase64Url(str: string): Uint8Array {
   }
   return fromBase64(base64);
 }
+
+export function utf8Encode(str: string): Uint8Array {
+  if (typeof TextEncoder !== 'undefined') {
+    try {
+      return new TextEncoder().encode(str);
+    } catch {}
+  }
+  const bytes: number[] = [];
+  const s = String(str);
+  for (let i = 0; i < s.length; i++) {
+    let cp = s.charCodeAt(i);
+    if (cp >= 0xd800 && cp <= 0xdbff && i + 1 < s.length) {
+      const next = s.charCodeAt(i + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        cp = (cp - 0xd800) * 0x400 + (next - 0xdc00) + 0x10000;
+        i++;
+      }
+    }
+    if (cp < 0x80) {
+      bytes.push(cp);
+    } else if (cp < 0x800) {
+      bytes.push(0xc0 | (cp >> 6), 0x80 | (cp & 0x3f));
+    } else if (cp < 0x10000) {
+      bytes.push(0xe0 | (cp >> 12), 0x80 | ((cp >> 6) & 0x3f), 0x80 | (cp & 0x3f));
+    } else {
+      bytes.push(
+        0xf0 | (cp >> 18),
+        0x80 | ((cp >> 12) & 0x3f),
+        0x80 | ((cp >> 6) & 0x3f),
+        0x80 | (cp & 0x3f)
+      );
+    }
+  }
+  return new Uint8Array(bytes);
+}
+
+export function utf8Decode(bytes: Uint8Array): string {
+  if (typeof TextDecoder !== 'undefined') {
+    try {
+      return new TextDecoder().decode(bytes);
+    } catch {}
+  }
+  let str = '';
+  let i = 0;
+  const len = bytes.length;
+  while (i < len) {
+    const b0 = bytes[i++] ?? 0;
+    if (b0 < 0x80) {
+      str += String.fromCharCode(b0);
+    } else if (b0 >= 0xc0 && b0 < 0xe0) {
+      const b1 = bytes[i++] ?? 0;
+      str += String.fromCharCode(((b0 & 0x1f) << 6) | (b1 & 0x3f));
+    } else if (b0 >= 0xe0 && b0 < 0xf0) {
+      const b1 = bytes[i++] ?? 0;
+      const b2 = bytes[i++] ?? 0;
+      str += String.fromCharCode(((b0 & 0x0f) << 12) | ((b1 & 0x3f) << 6) | (b2 & 0x3f));
+    } else if (b0 >= 0xf0 && b0 <= 0xf7) {
+      const b1 = bytes[i++] ?? 0;
+      const b2 = bytes[i++] ?? 0;
+      const b3 = bytes[i++] ?? 0;
+      let cp =
+        (((b0 & 0x07) << 18) | ((b1 & 0x3f) << 12) | ((b2 & 0x3f) << 6) | (b3 & 0x3f)) -
+        0x10000;
+      str += String.fromCharCode(0xd800 + (cp >> 10), 0xdc00 + (cp & 0x3ff));
+    } else {
+      str += String.fromCharCode(b0);
+    }
+  }
+  return str;
+}

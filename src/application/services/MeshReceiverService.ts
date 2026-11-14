@@ -1,6 +1,7 @@
 import { MeshTransportAdapter } from '../../mesh/adapters/MeshTransportAdapter';
 import { DeltaSyncService } from '../../mesh/sync/DeltaSyncService';
 import { PacketEnvelope } from '../../mesh/protocol/contracts';
+import { utf8Decode } from '../../shared/utils';
 
 export type EventReceivedListener = (envelope: PacketEnvelope<any>) => void;
 
@@ -29,7 +30,7 @@ export class MeshReceiverService {
    */
   async handleIncomingMessage(peerId: string, payloadBytes: Uint8Array): Promise<void> {
     try {
-      const text = new TextDecoder().decode(payloadBytes);
+      const text = utf8Decode(payloadBytes);
       const parsed = JSON.parse(text);
 
       if (parsed && parsed.protocol === 'OFFGRID' && parsed.packetId) {

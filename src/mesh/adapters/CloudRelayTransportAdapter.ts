@@ -62,7 +62,11 @@ export class CloudRelayTransportAdapter implements MeshTransportAdapter {
             const rawBytes = fromBase64(parsed.message);
             if (rawBytes.length > 0) {
               for (const cb of this.messageReceivedListeners) {
-                cb('CLOUD_RELAY', rawBytes);
+                try {
+                  cb('CLOUD_RELAY', rawBytes);
+                } catch (cbErr) {
+                  console.warn('Notice in WS message listener callback:', cbErr);
+                }
               }
             }
           }
@@ -117,7 +121,11 @@ export class CloudRelayTransportAdapter implements MeshTransportAdapter {
               const rawBytes = fromBase64(data.message);
               if (rawBytes.length > 0) {
                 for (const cb of this.messageReceivedListeners) {
-                  cb('CLOUD_RELAY', rawBytes);
+                  try {
+                    cb('CLOUD_RELAY', rawBytes);
+                  } catch (cbErr) {
+                    console.warn('Notice in HTTP poll listener callback:', cbErr);
+                  }
                 }
               }
             }

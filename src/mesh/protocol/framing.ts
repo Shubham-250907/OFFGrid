@@ -3,6 +3,8 @@
  * Handles packet chunking and deterministic reassembly across BLE MTU boundaries (512-byte ATT limits).
  */
 
+import { utf8Encode, utf8Decode } from '../../shared/utils';
+
 const FRAME_MAGIC = new Uint8Array([0x4F, 0x46, 0x46, 0x31]); // 'OFF1'
 export const DEFAULT_CHUNK_SIZE = 180; // Safe payload size below 512 MTU with header overhead
 
@@ -22,8 +24,7 @@ export function splitIntoFrames(
   const totalChunks = Math.ceil(payload.length / chunkSize) || 1;
   const frames: Uint8Array[] = [];
 
-  const encoder = new TextEncoder();
-  const packetIdBytes = encoder.encode(packetId.padEnd(36, ' ').slice(0, 36));
+  const packetIdBytes = utf8Encode(packetId.padEnd(36, ' ').slice(0, 36));
 
   for (let i = 0; i < totalChunks; i++) {
     const start = i * chunkSize;
@@ -71,8 +72,7 @@ export function parseFrame(frameBytes: Uint8Array): {
     return null;
   }
 
-  const decoder = new TextDecoder();
-  const packetId = decoder.decode(frameBytes.slice(4, 40)).trim();
+  const packetId = utf8Decode(frameBytes.slice(4, 40)).trim();
 
   const view = new DataView(frameBytes.buffer, frameBytes.byteOffset, frameBytes.byteLength);
   const chunkIndex = view.getUint16(40, false);

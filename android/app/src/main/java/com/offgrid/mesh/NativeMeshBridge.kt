@@ -56,16 +56,21 @@ class NativeMeshBridge(reactContext: ReactApplicationContext) :
 
     private val connectedClients = ConcurrentHashMap<String, BluetoothDevice>()
     private val clientGatts = ConcurrentHashMap<String, BluetoothGatt>()
+    private val connectingAddresses = ConcurrentHashMap.newKeySet<String>()
 
     private var localPublicKeyFingerprint: String = "OFFGRID"
 
     override fun getName(): String = NAME
 
     private fun sendEvent(eventName: String, params: Any?) {
-        if (reactApplicationContext.hasActiveReactInstance()) {
-            reactApplicationContext
-                .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
-                .emit(eventName, params)
+        try {
+            if (reactApplicationContext.hasActiveReactInstance()) {
+                reactApplicationContext
+                    .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                    .emit(eventName, params)
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("OFFGRID_BLE", "sendEvent notice for $eventName: ${e.message}")
         }
     }
 
@@ -89,20 +94,25 @@ class NativeMeshBridge(reactContext: ReactApplicationContext) :
 
         val serverCallback = object : BluetoothGattServerCallback() {
             override fun onConnectionStateChange(device: BluetoothDevice, status: Int, newState: Int) {
-                if (newState == BluetoothProfile.STATE_CONNECTED) {
-                    connectedClients[device.address] = device
-                    val peerMap = Arguments.createMap().apply {
-                        putString("peerId", device.address)
-                        putString("transport", "BLE")
-                        putDouble("discoveredAt", System.currentTimeMillis().toDouble())
+                try {
+                    val addr = device.address ?: return
+                    if (newState == BluetoothProfile.STATE_CONNECTED) {
+                        connectedClients[addr] = device
+                        val peerMap = Arguments.createMap().apply {
+                            putString("peerId", addr)
+                            putString("transport", "BLE")
+                            putDouble("discoveredAt", System.currentTimeMillis().toDouble())
+                        }
+                        sendEvent("onPeerDiscovered", peerMap)
+                    } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                        connectedClients.remove(addr)
+                        val disconnectMap = Arguments.createMap().apply {
+                            putString("peerId", addr)
+                        }
+                        sendEvent("onPeerDisconnected", disconnectMap)
                     }
-                    sendEvent("onPeerDiscovered", peerMap)
-                } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
-                    connectedClients.remove(device.address)
-                    val disconnectMap = Arguments.createMap().apply {
-                        putString("peerId", device.address)
-                    }
-                    sendEvent("onPeerDisconnected", disconnectMap)
+                } catch (e: Exception) {
+                    android.util.Log.w("OFFGRID_BLE", "serverCallback onConnectionStateChange notice: ${e.message}")
                 }
             }
 
@@ -115,16 +125,20 @@ class NativeMeshBridge(reactContext: ReactApplicationContext) :
                 offset: Int,
                 value: ByteArray?
             ) {
-                if (value != null) {
-                    val base64Payload = Base64.encodeToString(value, Base64.NO_WRAP)
-                    val msgMap = Arguments.createMap().apply {
-                        putString("peerId", device.address)
-                        putString("payload", base64Payload)
+                try {
+                    if (value != null && value.isNotEmpty()) {
+                        val base64Payload = Base64.encodeToString(value, Base64.NO_WRAP)
+                        val msgMap = Arguments.createMap().apply {
+                            putString("peerId", device.address ?: "UNKNOWN")
+                            putString("payload", base64Payload)
+                        }
+                        sendEvent("onMessageReceived", msgMap)
                     }
-                    sendEvent("onMessageReceived", msgMap)
-                }
-                if (responseNeeded) {
-                    gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, value)
+                    if (responseNeeded) {
+                        gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, value)
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.w("OFFGRID_BLE", "serverCallback onCharacteristicWriteRequest notice: ${e.message}")
                 }
             }
         }
@@ -210,18 +224,26 @@ class NativeMeshBridge(reactContext: ReactApplicationContext) :
 
         val scanCallback = object : ScanCallback() {
             override fun onScanResult(callbackType: Int, result: ScanResult) {
-                val device = result.device
-                val peerMap = Arguments.createMap().apply {
-                    putString("peerId", device.address)
-                    putString("transport", "BLE")
-                    putInt("rssi", result.rssi)
-                    putDouble("discoveredAt", System.currentTimeMillis().toDouble())
-                }
-                sendEvent("onPeerDiscovered", peerMap)
+                try {
+                    val device = result.device ?: return
+                    val address = device.address ?: return
 
-                // Auto-connect to newly discovered peer
-                if (!clientGatts.containsKey(device.address) && !connectedClients.containsKey(device.address)) {
-                    connectInternal(device)
+                    val isConnected = clientGatts.containsKey(address) || connectedClients.containsKey(address)
+                    val isConnecting = connectingAddresses.contains(address)
+
+                    if (!isConnected && !isConnecting) {
+                        connectingAddresses.add(address)
+                        val peerMap = Arguments.createMap().apply {
+                            putString("peerId", address)
+                            putString("transport", "BLE")
+                            putInt("rssi", result.rssi)
+                            putDouble("discoveredAt", System.currentTimeMillis().toDouble())
+                        }
+                        sendEvent("onPeerDiscovered", peerMap)
+                        connectInternal(device)
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.w("OFFGRID_BLE", "scanCallback onScanResult notice: ${e.message}")
                 }
             }
         }
@@ -241,54 +263,76 @@ class NativeMeshBridge(reactContext: ReactApplicationContext) :
     }
 
     private fun connectInternal(device: BluetoothDevice) {
-        val peerId = device.address
+        val peerId = device.address ?: return
         try {
             val gattCallback = object : BluetoothGattCallback() {
                 override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
-                    if (newState == BluetoothProfile.STATE_CONNECTED) {
-                        clientGatts[peerId] = gatt
-                        gatt.requestMtu(512)
-                        gatt.discoverServices()
-                    } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
-                        clientGatts.remove(peerId)
-                        val disconnectMap = Arguments.createMap().apply {
-                            putString("peerId", peerId)
+                    try {
+                        if (newState == BluetoothProfile.STATE_CONNECTED && status == BluetoothGatt.GATT_SUCCESS) {
+                            clientGatts[peerId] = gatt
+                            connectingAddresses.remove(peerId)
+                            gatt.requestMtu(512)
+                            gatt.discoverServices()
+                        } else if (newState == BluetoothProfile.STATE_DISCONNECTED || status != BluetoothGatt.GATT_SUCCESS) {
+                            clientGatts.remove(peerId)
+                            connectingAddresses.remove(peerId)
+                            try {
+                                gatt.disconnect()
+                                gatt.close()
+                            } catch (_: Exception) {}
+                            val disconnectMap = Arguments.createMap().apply {
+                                putString("peerId", peerId)
+                            }
+                            sendEvent("onPeerDisconnected", disconnectMap)
                         }
-                        sendEvent("onPeerDisconnected", disconnectMap)
+                    } catch (e: Exception) {
+                        android.util.Log.w("OFFGRID_BLE", "gattCallback onConnectionStateChange notice: ${e.message}")
                     }
                 }
 
                 override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
-                    if (status == BluetoothGatt.GATT_SUCCESS) {
-                        val service = gatt.getService(SERVICE_UUID)
-                        val transferChar = service?.getCharacteristic(CHARACTERISTIC_TRANSFER)
-                        if (transferChar != null) {
-                            gatt.setCharacteristicNotification(transferChar, true)
-                            val cccd = transferChar.getDescriptor(UUID.fromString("00002902-0000-1000-8000-00805f9b34fb"))
-                            if (cccd != null) {
-                                cccd.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-                                gatt.writeDescriptor(cccd)
+                    try {
+                        if (status == BluetoothGatt.GATT_SUCCESS) {
+                            val service = gatt.getService(SERVICE_UUID)
+                            val transferChar = service?.getCharacteristic(CHARACTERISTIC_TRANSFER)
+                            if (transferChar != null) {
+                                gatt.setCharacteristicNotification(transferChar, true)
+                                val cccd = transferChar.getDescriptor(UUID.fromString("00002902-0000-1000-8000-00805f9b34fb"))
+                                if (cccd != null) {
+                                    cccd.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                                    gatt.writeDescriptor(cccd)
+                                }
                             }
                         }
+                    } catch (e: Exception) {
+                        android.util.Log.w("OFFGRID_BLE", "gattCallback onServicesDiscovered notice: ${e.message}")
                     }
                 }
 
                 override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
-                    val value = characteristic.value
-                    if (value != null && value.isNotEmpty()) {
-                        val base64Payload = Base64.encodeToString(value, Base64.NO_WRAP)
-                        val msgMap = Arguments.createMap().apply {
-                            putString("peerId", peerId)
-                            putString("payload", base64Payload)
+                    try {
+                        val value = characteristic.value
+                        if (value != null && value.isNotEmpty()) {
+                            val base64Payload = Base64.encodeToString(value, Base64.NO_WRAP)
+                            val msgMap = Arguments.createMap().apply {
+                                putString("peerId", peerId)
+                                putString("payload", base64Payload)
+                            }
+                            sendEvent("onMessageReceived", msgMap)
                         }
-                        sendEvent("onMessageReceived", msgMap)
+                    } catch (e: Exception) {
+                        android.util.Log.w("OFFGRID_BLE", "gattCallback onCharacteristicChanged notice: ${e.message}")
                     }
                 }
             }
 
             val gatt = device.connectGatt(reactApplicationContext, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
-            clientGatts[peerId] = gatt
-        } catch (_: Exception) {}
+            if (gatt == null) {
+                connectingAddresses.remove(peerId)
+            }
+        } catch (_: Exception) {
+            connectingAddresses.remove(peerId)
+        }
     }
 
     @ReactMethod
@@ -354,15 +398,28 @@ class NativeMeshBridge(reactContext: ReactApplicationContext) :
             var sentCount = 0
 
             // 1. Broadcast to client GATTs
-            for ((_, gatt) in clientGatts) {
-                val service = gatt.getService(SERVICE_UUID)
-                val characteristic = service?.getCharacteristic(CHARACTERISTIC_TRANSFER)
-                if (characteristic != null) {
-                    characteristic.value = rawBytes
-                    characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
-                    if (gatt.writeCharacteristic(characteristic)) {
-                        sentCount++
+            val deadGatts = mutableListOf<String>()
+            for ((peerId, gatt) in clientGatts) {
+                try {
+                    val service = gatt.getService(SERVICE_UUID)
+                    val characteristic = service?.getCharacteristic(CHARACTERISTIC_TRANSFER)
+                    if (characteristic != null) {
+                        characteristic.value = rawBytes
+                        characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
+                        if (gatt.writeCharacteristic(characteristic)) {
+                            sentCount++
+                        }
                     }
+                } catch (e: Exception) {
+                    deadGatts.add(peerId)
+                }
+            }
+            for (deadId in deadGatts) {
+                clientGatts.remove(deadId)?.let {
+                    try {
+                        it.disconnect()
+                        it.close()
+                    } catch (_: Exception) {}
                 }
             }
 
@@ -373,9 +430,11 @@ class NativeMeshBridge(reactContext: ReactApplicationContext) :
                 if (characteristic != null) {
                     characteristic.value = rawBytes
                     for ((_, clientDevice) in connectedClients) {
-                        if (server.notifyCharacteristicChanged(clientDevice, characteristic, false)) {
-                            sentCount++
-                        }
+                        try {
+                            if (server.notifyCharacteristicChanged(clientDevice, characteristic, false)) {
+                                sentCount++
+                            }
+                        } catch (_: Exception) {}
                     }
                 }
             }
