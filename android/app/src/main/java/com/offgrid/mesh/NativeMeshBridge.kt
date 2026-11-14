@@ -356,14 +356,10 @@ class NativeMeshBridge(reactContext: ReactApplicationContext) :
                     val addr = device.address ?: return
                     if (newState == BluetoothProfile.STATE_CONNECTED) {
                         connectedClients[addr] = device
-                        val peerMap = Arguments.createMap().apply {
-                            putString("peerId", addr)
-                            putString("transport", "BLE")
-                            putDouble("discoveredAt", System.currentTimeMillis().toDouble())
-                        }
-                        sendEvent("onPeerDiscovered", peerMap)
+                        android.util.Log.i("OFFGRID_BLE", "GATT server: client connected from $addr")
                     } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                         connectedClients.remove(addr)
+                        android.util.Log.i("OFFGRID_BLE", "GATT server: client disconnected from $addr")
                         val disconnectMap = Arguments.createMap().apply {
                             putString("peerId", addr)
                         }
@@ -399,6 +395,42 @@ class NativeMeshBridge(reactContext: ReactApplicationContext) :
                     android.util.Log.w("OFFGRID_BLE", "serverCallback onCharacteristicWriteRequest notice: ${e.message}")
                 }
             }
+
+            override fun onDescriptorWriteRequest(
+                device: BluetoothDevice,
+                requestId: Int,
+                descriptor: BluetoothGattDescriptor,
+                preparedWrite: Boolean,
+                responseNeeded: Boolean,
+                offset: Int,
+                value: ByteArray?
+            ) {
+                try {
+                    descriptor.value = value
+                    if (responseNeeded) {
+                        gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, value)
+                    }
+                    val addr = device.address ?: return
+                    connectedClients[addr] = device
+                    android.util.Log.i("OFFGRID_BLE", "GATT server: CCCD notification subscription confirmed for $addr")
+                    val peerMap = Arguments.createMap().apply {
+                        putString("peerId", addr)
+                        putString("transport", "BLE")
+                        putDouble("discoveredAt", System.currentTimeMillis().toDouble())
+                    }
+                    sendEvent("onPeerDiscovered", peerMap)
+                } catch (e: Exception) {
+                    android.util.Log.w("OFFGRID_BLE", "serverCallback onDescriptorWriteRequest notice: ${e.message}")
+                }
+            }
+
+            override fun onNotificationSent(device: BluetoothDevice, status: Int) {
+                android.util.Log.i("OFFGRID_BLE", "GATT server: notification sent to ${device.address}, status=$status")
+            }
+
+            override fun onExecuteWrite(device: BluetoothDevice, requestId: Int, execute: Boolean) {
+                gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, null)
+            }
         }
 
         try {
@@ -417,10 +449,17 @@ class NativeMeshBridge(reactContext: ReactApplicationContext) :
                 BluetoothGattCharacteristic.PERMISSION_WRITE
             )
 
+            // Attach standard Client Characteristic Configuration Descriptor (CCCD) for notification subscriptions
+            val cccdDescriptor = BluetoothGattDescriptor(
+                UUID.fromString("00002902-0000-1000-8000-00805f9b34fb"),
+                BluetoothGattDescriptor.PERMISSION_READ or BluetoothGattDescriptor.PERMISSION_WRITE
+            )
+            transferChar.addDescriptor(cccdDescriptor)
+
             service.addCharacteristic(handshakeChar)
             service.addCharacteristic(transferChar)
             gattServer?.addService(service)
-            android.util.Log.i("OFFGRID_BLE", "GATT server registered primary mesh service.")
+            android.util.Log.i("OFFGRID_BLE", "GATT server registered primary mesh service with CCCD descriptor.")
         } catch (e: Exception) {
             android.util.Log.e("OFFGRID_BLE", "Failed to setup GATT server", e)
         }
@@ -535,11 +574,27 @@ class NativeMeshBridge(reactContext: ReactApplicationContext) :
                     val device = result.device ?: return
                     val address = device.address ?: return
 
+                    // MVP Constraint: Support one connected peer at a time
+                    if (clientGatts.isNotEmpty() || connectedClients.isNotEmpty()) {
+                        return
+                    }
+
                     val isConnected = clientGatts.containsKey(address) || connectedClients.containsKey(address)
                     val isConnecting = connectingAddresses.contains(address)
 
                     if (!isConnected && !isConnecting) {
-                        connectingAddresses.add(address)
+                        // Avoid dual-central collision: deterministic role negotiation
+                        val serviceData = result.scanRecord?.getServiceData(ParcelUuid(SERVICE_UUID))
+                        val peerFingerprint = serviceData?.let { String(it, Charsets.UTF_8) }
+                        val myFingerprint = localPublicKeyFingerprint.take(8)
+
+                        val shouldConnect = if (peerFingerprint != null && peerFingerprint != myFingerprint) {
+                            myFingerprint > peerFingerprint
+                        } else {
+                            address.hashCode() > (bluetoothAdapter?.name?.hashCode() ?: 0)
+                        }
+
+                        // Notify UI that a nearby OFFGRID device was discovered
                         val peerMap = Arguments.createMap().apply {
                             putString("peerId", address)
                             putString("transport", "BLE")
@@ -547,7 +602,14 @@ class NativeMeshBridge(reactContext: ReactApplicationContext) :
                             putDouble("discoveredAt", System.currentTimeMillis().toDouble())
                         }
                         sendEvent("onPeerDiscovered", peerMap)
-                        connectInternal(device)
+
+                        if (shouldConnect) {
+                            connectingAddresses.add(address)
+                            android.util.Log.i("OFFGRID_BLE", "Role negotiation: Central role elected for $address. Connecting...")
+                            connectInternal(device)
+                        } else {
+                            android.util.Log.i("OFFGRID_BLE", "Role negotiation: Peripheral role elected for $address. Awaiting incoming GATT connection.")
+                        }
                     }
                 } catch (e: Exception) {
                     android.util.Log.w("OFFGRID_BLE", "scanCallback onScanResult notice: ${e.message}")
@@ -578,9 +640,16 @@ class NativeMeshBridge(reactContext: ReactApplicationContext) :
                         if (newState == BluetoothProfile.STATE_CONNECTED && status == BluetoothGatt.GATT_SUCCESS) {
                             clientGatts[peerId] = gatt
                             connectingAddresses.remove(peerId)
-                            gatt.requestMtu(512)
-                            gatt.discoverServices()
+                            android.util.Log.i("OFFGRID_BLE", "GATT connected to $peerId. Serialized Step 1: Requesting MTU 512...")
+
+                            // Serialized Step 1: Request MTU 512
+                            val mtuQueued = gatt.requestMtu(512)
+                            if (!mtuQueued) {
+                                // Fallback: If MTU request could not be queued, discover services immediately
+                                gatt.discoverServices()
+                            }
                         } else if (newState == BluetoothProfile.STATE_DISCONNECTED || status != BluetoothGatt.GATT_SUCCESS) {
+                            android.util.Log.i("OFFGRID_BLE", "GATT disconnected from $peerId (status=$status, newState=$newState)")
                             clientGatts.remove(peerId)
                             connectingAddresses.remove(peerId)
                             try {
@@ -597,23 +666,54 @@ class NativeMeshBridge(reactContext: ReactApplicationContext) :
                     }
                 }
 
+                override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
+                    android.util.Log.i("OFFGRID_BLE", "MTU negotiated to $mtu (status=$status). Serialized Step 2: Discovering services...")
+                    // Serialized Step 2: Discover services only after MTU negotiation completes
+                    gatt.discoverServices()
+                }
+
                 override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
                     try {
                         if (status == BluetoothGatt.GATT_SUCCESS) {
                             val service = gatt.getService(SERVICE_UUID)
                             val transferChar = service?.getCharacteristic(CHARACTERISTIC_TRANSFER)
                             if (transferChar != null) {
+                                // Serialized Step 3: Enable notification locally
                                 gatt.setCharacteristicNotification(transferChar, true)
+
+                                // Serialized Step 4: Write CCCD descriptor to server
                                 val cccd = transferChar.getDescriptor(UUID.fromString("00002902-0000-1000-8000-00805f9b34fb"))
                                 if (cccd != null) {
                                     cccd.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-                                    gatt.writeDescriptor(cccd)
+                                    val writeQueued = gatt.writeDescriptor(cccd)
+                                    android.util.Log.i("OFFGRID_BLE", "Serialized Step 4: Queued CCCD descriptor write: $writeQueued")
+                                } else {
+                                    val peerMap = Arguments.createMap().apply {
+                                        putString("peerId", peerId)
+                                        putString("transport", "BLE")
+                                        putDouble("discoveredAt", System.currentTimeMillis().toDouble())
+                                    }
+                                    sendEvent("onPeerDiscovered", peerMap)
                                 }
                             }
                         }
                     } catch (e: Exception) {
                         android.util.Log.w("OFFGRID_BLE", "gattCallback onServicesDiscovered notice: ${e.message}")
                     }
+                }
+
+                override fun onDescriptorWrite(gatt: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
+                    android.util.Log.i("OFFGRID_BLE", "Serialized Step 5: CCCD descriptor write confirmed (status=$status). Bidirectional pipe READY!")
+                    val peerMap = Arguments.createMap().apply {
+                        putString("peerId", peerId)
+                        putString("transport", "BLE")
+                        putDouble("discoveredAt", System.currentTimeMillis().toDouble())
+                    }
+                    sendEvent("onPeerDiscovered", peerMap)
+                }
+
+                override fun onCharacteristicWrite(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
+                    android.util.Log.i("OFFGRID_BLE", "Characteristic write completed with status=$status")
                 }
 
                 override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
@@ -672,26 +772,43 @@ class NativeMeshBridge(reactContext: ReactApplicationContext) :
     @ReactMethod
     fun send(peerId: String, payloadBase64: String, priority: Int, promise: Promise) {
         try {
-            val gatt = clientGatts[peerId]
-            if (gatt == null) {
-                promise.reject("PEER_NOT_CONNECTED", "Peer is not connected: $peerId")
-                return
-            }
-
-            val service = gatt.getService(SERVICE_UUID)
-            val characteristic = service?.getCharacteristic(CHARACTERISTIC_TRANSFER)
-
-            if (characteristic == null) {
-                promise.reject("CHARACTERISTIC_NOT_FOUND", "Transfer characteristic not available")
-                return
-            }
-
             val rawBytes = Base64.decode(payloadBase64, Base64.NO_WRAP)
-            characteristic.value = rawBytes
-            characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
-            val success = gatt.writeCharacteristic(characteristic)
 
-            promise.resolve(success)
+            // 1. Central role: write to remote GATT server
+            val gatt = clientGatts[peerId]
+            if (gatt != null) {
+                val service = gatt.getService(SERVICE_UUID)
+                val characteristic = service?.getCharacteristic(CHARACTERISTIC_TRANSFER)
+                if (characteristic != null) {
+                    characteristic.value = rawBytes
+                    characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+                    val success = gatt.writeCharacteristic(characteristic)
+                    android.util.Log.i("OFFGRID_BLE", "send: wrote characteristic to clientGatt $peerId: $success")
+                    promise.resolve(success)
+                    return
+                }
+            }
+
+            // 2. Peripheral role: notify to connected central client
+            val clientDevice = connectedClients[peerId]
+            if (clientDevice != null && gattServer != null) {
+                val service = gattServer?.getService(SERVICE_UUID)
+                val characteristic = service?.getCharacteristic(CHARACTERISTIC_TRANSFER)
+                if (characteristic != null) {
+                    characteristic.value = rawBytes
+                    val success = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        gattServer?.notifyCharacteristicChanged(clientDevice, characteristic, false, rawBytes) == 0
+                    } else {
+                        @Suppress("DEPRECATION")
+                        gattServer?.notifyCharacteristicChanged(clientDevice, characteristic, false) == true
+                    }
+                    android.util.Log.i("OFFGRID_BLE", "send: notified connectedClient $peerId: $success")
+                    promise.resolve(success)
+                    return
+                }
+            }
+
+            promise.reject("PEER_NOT_CONNECTED", "Peer is not connected via Central or Peripheral GATT: $peerId")
         } catch (e: Exception) {
             promise.reject("SEND_ERROR", e.message, e)
         }
@@ -704,7 +821,7 @@ class NativeMeshBridge(reactContext: ReactApplicationContext) :
             val rawBytes = Base64.decode(payloadBase64, Base64.NO_WRAP)
             var sentCount = 0
 
-            // 1. Broadcast to client GATTs
+            // 1. Broadcast to client GATTs (Central role)
             val deadGatts = mutableListOf<String>()
             for ((peerId, gatt) in clientGatts) {
                 try {
@@ -712,7 +829,7 @@ class NativeMeshBridge(reactContext: ReactApplicationContext) :
                     val characteristic = service?.getCharacteristic(CHARACTERISTIC_TRANSFER)
                     if (characteristic != null) {
                         characteristic.value = rawBytes
-                        characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
+                        characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
                         if (gatt.writeCharacteristic(characteristic)) {
                             sentCount++
                         }
@@ -730,7 +847,7 @@ class NativeMeshBridge(reactContext: ReactApplicationContext) :
                 }
             }
 
-            // 2. Broadcast to connected server clients via notify
+            // 2. Broadcast to connected server clients via notify (Peripheral role)
             gattServer?.let { server ->
                 val service = server.getService(SERVICE_UUID)
                 val characteristic = service?.getCharacteristic(CHARACTERISTIC_TRANSFER)
@@ -738,7 +855,13 @@ class NativeMeshBridge(reactContext: ReactApplicationContext) :
                     characteristic.value = rawBytes
                     for ((_, clientDevice) in connectedClients) {
                         try {
-                            if (server.notifyCharacteristicChanged(clientDevice, characteristic, false)) {
+                            val ok = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                server.notifyCharacteristicChanged(clientDevice, characteristic, false, rawBytes) == 0
+                            } else {
+                                @Suppress("DEPRECATION")
+                                server.notifyCharacteristicChanged(clientDevice, characteristic, false)
+                            }
+                            if (ok) {
                                 sentCount++
                             }
                         } catch (_: Exception) {}
@@ -746,6 +869,7 @@ class NativeMeshBridge(reactContext: ReactApplicationContext) :
                 }
             }
 
+            android.util.Log.i("OFFGRID_BLE", "broadcast: transmitted to $sentCount connections (clientGatts=${clientGatts.size}, connectedClients=${connectedClients.size})")
             promise.resolve(sentCount)
         } catch (e: Exception) {
             promise.reject("BROADCAST_ERROR", e.message, e)

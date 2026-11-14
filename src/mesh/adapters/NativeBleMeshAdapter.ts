@@ -162,6 +162,9 @@ export class NativeBleMeshAdapter implements MeshTransportAdapter {
       for (const frame of frames) {
         const base64 = toBase64(frame);
         await this.nativeBridge.send(peerId, base64, priority);
+        if (frames.length > 1) {
+          await new Promise((resolve) => setTimeout(resolve, 30));
+        }
       }
     } else {
       // In-memory loopback for test execution
@@ -184,6 +187,9 @@ export class NativeBleMeshAdapter implements MeshTransportAdapter {
       for (const frame of frames) {
         const base64 = toBase64(frame);
         await this.nativeBridge.broadcast(base64, priority);
+        if (frames.length > 1) {
+          await new Promise((resolve) => setTimeout(resolve, 30));
+        }
       }
     } else {
       for (const frame of frames) {
