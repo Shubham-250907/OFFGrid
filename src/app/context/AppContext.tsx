@@ -10,7 +10,7 @@ import { Ed25519CryptoProvider } from '../../security/identity/Ed25519CryptoProv
 import { LocationService, NativeLocationService } from '../../location/LocationService';
 import { BatteryService, NativeBatteryService } from '../../battery/BatteryService';
 import { MeshTransportAdapter } from '../../mesh/adapters/MeshTransportAdapter';
-import { NativeBleMeshAdapter } from '../../mesh/adapters/NativeBleMeshAdapter';
+import { CompositeMeshAdapter } from '../../mesh/adapters/CompositeMeshAdapter';
 import { DeltaSyncService } from '../../mesh/sync/DeltaSyncService';
 import { MeshReceiverService } from '../../application/services/MeshReceiverService';
 import { SosService } from '../../application/services/SosService';
@@ -183,7 +183,7 @@ export const AppContextProvider: React.FC<AppContextProviderProps> = ({
 
         const locationService = new NativeLocationService();
         const batteryService = new NativeBatteryService();
-        const transport = new NativeBleMeshAdapter(id.keyId);
+        const transport = new CompositeMeshAdapter(id.keyId);
         const deltaSyncService = new DeltaSyncService(db, crypto);
         const meshReceiver = new MeshReceiverService(transport, deltaSyncService);
 

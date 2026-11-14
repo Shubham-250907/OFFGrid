@@ -6,6 +6,7 @@ import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCallback
 import android.bluetooth.BluetoothGattCharacteristic
+import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothGattServer
 import android.bluetooth.BluetoothGattServerCallback
 import android.bluetooth.BluetoothGattService
@@ -210,6 +211,11 @@ class NativeMeshBridge(reactContext: ReactApplicationContext) :
                     putDouble("discoveredAt", System.currentTimeMillis().toDouble())
                 }
                 sendEvent("onPeerDiscovered", peerMap)
+
+                // Auto-connect to newly discovered peer
+                if (!clientGatts.containsKey(device.address) && !connectedClients.containsKey(device.address)) {
+                    connectInternal(device)
+                }
             }
         }
 
@@ -227,15 +233,9 @@ class NativeMeshBridge(reactContext: ReactApplicationContext) :
         }
     }
 
-    @ReactMethod
-    fun connect(peerId: String, promise: Promise) {
+    private fun connectInternal(device: BluetoothDevice) {
+        val peerId = device.address
         try {
-            val device = bluetoothAdapter?.getRemoteDevice(peerId)
-            if (device == null) {
-                promise.reject("DEVICE_NOT_FOUND", "Peer device not found: $peerId")
-                return
-            }
-
             val gattCallback = object : BluetoothGattCallback() {
                 override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
                     if (newState == BluetoothProfile.STATE_CONNECTED) {
@@ -250,10 +250,49 @@ class NativeMeshBridge(reactContext: ReactApplicationContext) :
                         sendEvent("onPeerDisconnected", disconnectMap)
                     }
                 }
+
+                override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
+                    if (status == BluetoothGatt.GATT_SUCCESS) {
+                        val service = gatt.getService(SERVICE_UUID)
+                        val transferChar = service?.getCharacteristic(CHARACTERISTIC_TRANSFER)
+                        if (transferChar != null) {
+                            gatt.setCharacteristicNotification(transferChar, true)
+                            val cccd = transferChar.getDescriptor(UUID.fromString("00002902-0000-1000-8000-00805f9b34fb"))
+                            if (cccd != null) {
+                                cccd.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                                gatt.writeDescriptor(cccd)
+                            }
+                        }
+                    }
+                }
+
+                override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
+                    val value = characteristic.value
+                    if (value != null && value.isNotEmpty()) {
+                        val base64Payload = Base64.encodeToString(value, Base64.NO_WRAP)
+                        val msgMap = Arguments.createMap().apply {
+                            putString("peerId", peerId)
+                            putString("payload", base64Payload)
+                        }
+                        sendEvent("onMessageReceived", msgMap)
+                    }
+                }
             }
 
             val gatt = device.connectGatt(reactApplicationContext, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
             clientGatts[peerId] = gatt
+        } catch (_: Exception) {}
+    }
+
+    @ReactMethod
+    fun connect(peerId: String, promise: Promise) {
+        try {
+            val device = bluetoothAdapter?.getRemoteDevice(peerId)
+            if (device == null) {
+                promise.reject("DEVICE_NOT_FOUND", "Peer device not found: $peerId")
+                return
+            }
+            connectInternal(device)
             promise.resolve(true)
         } catch (e: Exception) {
             promise.reject("CONNECT_ERROR", e.message, e)
@@ -302,11 +341,12 @@ class NativeMeshBridge(reactContext: ReactApplicationContext) :
 
     @ReactMethod
     fun broadcast(payloadBase64: String, priority: Int, promise: Promise) {
-        // Broadcasts to all currently connected peer GATTs
+        // Broadcasts to all currently connected peer GATT clients & GATT server connections
         try {
             val rawBytes = Base64.decode(payloadBase64, Base64.NO_WRAP)
             var sentCount = 0
 
+            // 1. Broadcast to client GATTs
             for ((_, gatt) in clientGatts) {
                 val service = gatt.getService(SERVICE_UUID)
                 val characteristic = service?.getCharacteristic(CHARACTERISTIC_TRANSFER)
@@ -318,6 +358,21 @@ class NativeMeshBridge(reactContext: ReactApplicationContext) :
                     }
                 }
             }
+
+            // 2. Broadcast to connected server clients via notify
+            gattServer?.let { server ->
+                val service = server.getService(SERVICE_UUID)
+                val characteristic = service?.getCharacteristic(CHARACTERISTIC_TRANSFER)
+                if (characteristic != null) {
+                    characteristic.value = rawBytes
+                    for ((_, clientDevice) in connectedClients) {
+                        if (server.notifyCharacteristicChanged(clientDevice, characteristic, false)) {
+                            sentCount++
+                        }
+                    }
+                }
+            }
+
             promise.resolve(sentCount)
         } catch (e: Exception) {
             promise.reject("BROADCAST_ERROR", e.message, e)
