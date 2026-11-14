@@ -10,6 +10,8 @@ android/app/build/
 android/build/
 *.apk
 *.aab
+*.keystore
+*.jks
 
 # React Native
 .expo/
