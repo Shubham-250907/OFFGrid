@@ -248,8 +248,8 @@ export const AppContextProvider: React.FC<AppContextProviderProps> = ({
             } else if (event.status === 'BLUETOOTH_UNAVAILABLE') {
               setMeshState('NO_BLE');
             } else if (event.status === 'READY') {
+              // Native Kotlin is the authoritative restart owner and auto-resumes discovery if previously active.
               setMeshState((prev) => (prev === 'BT_OFF' || prev === 'PERM_REQ' || prev === 'NO_BLE' ? 'SEARCHING' : prev));
-              transport.startDiscovery().catch(() => {});
             }
           });
         }

@@ -31,6 +31,7 @@ import android.location.LocationManager
 import android.os.Build
 import android.os.ParcelUuid
 import android.util.Base64
+import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.LifecycleEventListener
@@ -89,7 +90,10 @@ class NativeMeshBridge(reactContext: ReactApplicationContext) :
     private var isDiscoveryActive = false
 
     @Volatile
-    private var wasDiscoveryActiveBeforeDisable = false
+    private var discoveryRequested = false
+
+    private var activeAdvertiseCallback: AdvertiseCallback? = null
+    private var activeScanCallback: ScanCallback? = null
 
     private var bluetoothStateReceiver: BroadcastReceiver? = null
     private var isReceiverRegistered = false
@@ -129,35 +133,59 @@ class NativeMeshBridge(reactContext: ReactApplicationContext) :
         sendEvent("onGatewayStatusChanged", map)
     }
 
-    private fun checkPermissionsAndAvailability(): GatewayStatus {
+    private fun checkOperationPermission(operation: String = "all"): GatewayStatus {
         if (bluetoothAdapter == null) {
             return GatewayStatus.BLUETOOTH_UNAVAILABLE
         }
 
         val context = reactApplicationContext
+        val activity = currentActivity
+        val prefs = context.getSharedPreferences("offgrid_ble_perms", Context.MODE_PRIVATE)
+        val hasRequested = prefs.getBoolean("has_requested_perms", false)
 
-        // Check Android 12+ (API 31+) permissions
+        fun checkPerm(perm: String): GatewayStatus? {
+            val granted = ContextCompat.checkSelfPermission(context, perm) == PackageManager.PERMISSION_GRANTED
+            if (granted) return null
+
+            if (activity != null && hasRequested) {
+                val canShowRationale = ActivityCompat.shouldShowRequestPermissionRationale(activity, perm)
+                return if (canShowRationale) GatewayStatus.PERMISSION_REQUIRED else GatewayStatus.PERMISSION_DENIED
+            }
+            return GatewayStatus.PERMISSION_REQUIRED
+        }
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            val scanGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED
-            val connectGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
-            val advertiseGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_ADVERTISE) == PackageManager.PERMISSION_GRANTED
-
-            if (!scanGranted || !connectGranted || !advertiseGranted) {
-                return GatewayStatus.PERMISSION_REQUIRED
+            // Android 12+ (API 31+): Validate permissions according to the operation
+            when (operation) {
+                "scan" -> {
+                    checkPerm(Manifest.permission.BLUETOOTH_SCAN)?.let { return it }
+                }
+                "advertise" -> {
+                    checkPerm(Manifest.permission.BLUETOOTH_ADVERTISE)?.let { return it }
+                }
+                "connect" -> {
+                    checkPerm(Manifest.permission.BLUETOOTH_CONNECT)?.let { return it }
+                }
+                else -> {
+                    // Mesh discovery requires scan, advertise, and connect
+                    checkPerm(Manifest.permission.BLUETOOTH_SCAN)?.let { return it }
+                    checkPerm(Manifest.permission.BLUETOOTH_ADVERTISE)?.let { return it }
+                    checkPerm(Manifest.permission.BLUETOOTH_CONNECT)?.let { return it }
+                }
             }
         } else {
-            // Android 8 to 11 (API 26-30): requires Location permission for BLE scanning
-            val fineLocGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
-            if (!fineLocGranted) {
-                return GatewayStatus.PERMISSION_REQUIRED
-            }
+            // Android 8 to 11 (API 26-30):
+            // Scanning requires Location permission.
+            // Foreground / foreground-service scanning does not require background location.
+            if (operation == "scan" || operation == "all") {
+                checkPerm(Manifest.permission.ACCESS_FINE_LOCATION)?.let { return it }
 
-            // Check if device Location Services are turned on (mandatory for BLE scan on Android <= 30)
-            val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
-            val isLocationEnabled = locationManager?.isProviderEnabled(LocationManager.GPS_PROVIDER) == true ||
-                                    locationManager?.isProviderEnabled(LocationManager.NETWORK_PROVIDER) == true
-            if (!isLocationEnabled) {
-                return GatewayStatus.PERMISSION_REQUIRED
+                val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
+                val isLocationEnabled = locationManager?.isProviderEnabled(LocationManager.GPS_PROVIDER) == true ||
+                                        locationManager?.isProviderEnabled(LocationManager.NETWORK_PROVIDER) == true
+                if (!isLocationEnabled) {
+                    return GatewayStatus.PERMISSION_REQUIRED
+                }
             }
         }
 
@@ -166,6 +194,16 @@ class NativeMeshBridge(reactContext: ReactApplicationContext) :
         }
 
         return GatewayStatus.READY
+    }
+
+    private fun checkPermissionsAndAvailability(): GatewayStatus {
+        return checkOperationPermission("all")
+    }
+
+    @ReactMethod
+    fun markPermissionsRequested() {
+        val prefs = reactApplicationContext.getSharedPreferences("offgrid_ble_perms", Context.MODE_PRIVATE)
+        prefs.edit().putBoolean("has_requested_perms", true).apply()
     }
 
     private synchronized fun registerBluetoothStateReceiver() {
@@ -202,7 +240,6 @@ class NativeMeshBridge(reactContext: ReactApplicationContext) :
         when (state) {
             BluetoothAdapter.STATE_TURNING_OFF -> {
                 android.util.Log.i("OFFGRID_BLE", "Bluetooth state: TURNING_OFF. Halting active BLE operations.")
-                wasDiscoveryActiveBeforeDisable = isDiscoveryActive
                 stopBleOperations()
                 updateStatus(GatewayStatus.BLUETOOTH_DISABLED, "Bluetooth turning off")
             }
@@ -224,8 +261,8 @@ class NativeMeshBridge(reactContext: ReactApplicationContext) :
                 val newStatus = checkPermissionsAndAvailability()
                 updateStatus(newStatus, "Bluetooth turned on")
 
-                if (newStatus == GatewayStatus.READY && wasDiscoveryActiveBeforeDisable) {
-                    android.util.Log.i("OFFGRID_BLE", "Auto-resuming discovery after Bluetooth re-enabled.")
+                if (newStatus == GatewayStatus.READY && discoveryRequested && !isDiscoveryActive) {
+                    android.util.Log.i("OFFGRID_BLE", "Authoritative auto-resuming discovery after Bluetooth re-enabled.")
                     startAdvertisingInternal()
                     startScanningInternal()
                     isDiscoveryActive = true
@@ -234,13 +271,26 @@ class NativeMeshBridge(reactContext: ReactApplicationContext) :
         }
     }
 
-    private fun stopBleOperations() {
-        try {
-            advertiser?.stopAdvertising(object : AdvertiseCallback() {})
-        } catch (_: Exception) {}
-        try {
-            scanner?.stopScan(object : ScanCallback() {})
-        } catch (_: Exception) {}
+    private synchronized fun stopBleOperations() {
+        activeAdvertiseCallback?.let {
+            try {
+                advertiser?.stopAdvertising(it)
+                android.util.Log.i("OFFGRID_BLE", "Stopped active BLE advertising.")
+            } catch (e: Exception) {
+                android.util.Log.w("OFFGRID_BLE", "Error stopping advertising: ${e.message}")
+            }
+        }
+        activeAdvertiseCallback = null
+
+        activeScanCallback?.let {
+            try {
+                scanner?.stopScan(it)
+                android.util.Log.i("OFFGRID_BLE", "Stopped active BLE scan.")
+            } catch (e: Exception) {
+                android.util.Log.w("OFFGRID_BLE", "Error stopping scan: ${e.message}")
+            }
+        }
+        activeScanCallback = null
 
         isDiscoveryActive = false
         connectingAddresses.clear()
@@ -379,10 +429,17 @@ class NativeMeshBridge(reactContext: ReactApplicationContext) :
     @ReactMethod
     fun startDiscovery(promise: Promise) {
         try {
+            discoveryRequested = true
             val status = checkPermissionsAndAvailability()
             if (status != GatewayStatus.READY) {
                 updateStatus(status, "startDiscovery rejected")
                 promise.reject("GATEWAY_NOT_READY", "Gateway cannot start discovery in state: ${status.name}")
+                return
+            }
+
+            if (isDiscoveryActive) {
+                android.util.Log.i("OFFGRID_BLE", "startDiscovery: discovery already active, ignoring duplicate start.")
+                promise.resolve(true)
                 return
             }
 
@@ -396,9 +453,23 @@ class NativeMeshBridge(reactContext: ReactApplicationContext) :
         }
     }
 
-    private fun startAdvertisingInternal() {
+    private synchronized fun startAdvertisingInternal() {
+        val permStatus = checkOperationPermission("advertise")
+        if (permStatus != GatewayStatus.READY && permStatus != GatewayStatus.BLUETOOTH_DISABLED) {
+            android.util.Log.w("OFFGRID_BLE", "Cannot start advertising: permission status is ${permStatus.name}")
+            return
+        }
+
         if (advertiser == null) {
             advertiser = bluetoothAdapter?.bluetoothLeAdvertiser
+        }
+        if (advertiser == null) return
+
+        // Stop prior advertising callback to prevent leaks
+        activeAdvertiseCallback?.let {
+            try {
+                advertiser?.stopAdvertising(it)
+            } catch (_: Exception) {}
         }
 
         val settings = AdvertiseSettings.Builder()
@@ -427,13 +498,27 @@ class NativeMeshBridge(reactContext: ReactApplicationContext) :
                 android.util.Log.e("OFFGRID_BLE", "BLE advertising failed with code $errorCode")
             }
         }
-
+        activeAdvertiseCallback = callback
         advertiser?.startAdvertising(settings, data, scanResponse, callback)
     }
 
-    private fun startScanningInternal() {
+    private synchronized fun startScanningInternal() {
+        val permStatus = checkOperationPermission("scan")
+        if (permStatus != GatewayStatus.READY && permStatus != GatewayStatus.BLUETOOTH_DISABLED) {
+            android.util.Log.w("OFFGRID_BLE", "Cannot start scanning: permission status is ${permStatus.name}")
+            return
+        }
+
         if (scanner == null) {
             scanner = bluetoothAdapter?.bluetoothLeScanner
+        }
+        if (scanner == null) return
+
+        // Stop prior scan callback to prevent duplicate scans
+        activeScanCallback?.let {
+            try {
+                scanner?.stopScan(it)
+            } catch (_: Exception) {}
         }
 
         val filter = ScanFilter.Builder()
@@ -469,17 +554,15 @@ class NativeMeshBridge(reactContext: ReactApplicationContext) :
                 }
             }
         }
-
+        activeScanCallback = scanCallback
         scanner?.startScan(listOf(filter), settings, scanCallback)
     }
 
     @ReactMethod
     fun stopDiscovery(promise: Promise) {
         try {
-            advertiser?.stopAdvertising(object : AdvertiseCallback() {})
-            scanner?.stopScan(object : ScanCallback() {})
-            isDiscoveryActive = false
-            wasDiscoveryActiveBeforeDisable = false
+            discoveryRequested = false
+            stopBleOperations()
             promise.resolve(true)
         } catch (e: Exception) {
             promise.reject("STOP_DISCOVERY_ERROR", e.message, e)
@@ -704,7 +787,8 @@ class NativeMeshBridge(reactContext: ReactApplicationContext) :
                 advertiser = bluetoothAdapter?.bluetoothLeAdvertiser
                 scanner = bluetoothAdapter?.bluetoothLeScanner
                 setupGattServer()
-                if (wasDiscoveryActiveBeforeDisable) {
+                if (discoveryRequested && !isDiscoveryActive) {
+                    android.util.Log.i("OFFGRID_BLE", "Authoritative discovery resume on host resume.")
                     startAdvertisingInternal()
                     startScanningInternal()
                     isDiscoveryActive = true
@@ -719,6 +803,7 @@ class NativeMeshBridge(reactContext: ReactApplicationContext) :
 
     override fun onHostDestroy() {
         android.util.Log.i("OFFGRID_BLE", "NativeMeshBridge onHostDestroy - releasing native resources.")
+        reactApplicationContext.removeLifecycleEventListener(this)
         unregisterBluetoothStateReceiver()
         stopBleOperations()
         try {

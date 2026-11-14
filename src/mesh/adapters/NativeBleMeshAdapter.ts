@@ -10,6 +10,7 @@ export class NativeBleMeshAdapter implements MeshTransportAdapter {
   private statusChangedListeners = new Set<(event: GatewayStatusEvent) => void>();
 
   private currentStatus: GatewayStatus = 'INITIALIZING';
+  private isDiscoveryActive = false;
   private frameAssembler = new FrameAssembler();
   private nativeBridge = NativeModules.NativeMeshBridge;
   private isNativeAvailable: boolean;
@@ -28,6 +29,13 @@ export class NativeBleMeshAdapter implements MeshTransportAdapter {
         try {
           if (event?.status) {
             this.currentStatus = event.status;
+            if (
+              event.status === 'BLUETOOTH_DISABLED' ||
+              event.status === 'PERMISSION_REQUIRED' ||
+              event.status === 'PERMISSION_DENIED'
+            ) {
+              this.isDiscoveryActive = false;
+            }
           }
           for (const cb of this.statusChangedListeners) {
             cb(event);
@@ -115,15 +123,23 @@ export class NativeBleMeshAdapter implements MeshTransportAdapter {
   }
 
   async startDiscovery(): Promise<void> {
+    if (this.isDiscoveryActive) {
+      return;
+    }
     if (this.isNativeAvailable) {
       await this.nativeBridge.startDiscovery();
     }
+    this.isDiscoveryActive = true;
   }
 
   async stopDiscovery(): Promise<void> {
+    if (!this.isDiscoveryActive) {
+      return;
+    }
     if (this.isNativeAvailable) {
       await this.nativeBridge.stopDiscovery();
     }
+    this.isDiscoveryActive = false;
   }
 
   async connect(peerId: string): Promise<void> {
