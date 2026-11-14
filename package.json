@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@maplibre/maplibre-react-native": "^10.1.0",
+    "@noble/ed25519": "^2.3.0",
     "@noble/hashes": "^1.7.1",
     "@react-navigation/bottom-tabs": "^6.6.1",
     "@react-navigation/native": "^6.1.18",
@@ -27,6 +28,7 @@
     "@babel/preset-env": "^7.25.4",
     "@babel/preset-react": "^7.24.7",
     "@babel/preset-typescript": "^7.24.7",
+    "@react-native/metro-config": "^0.75.4",
     "@types/jest": "^29.5.14",
     "@types/react": "^18.3.18",
     "@types/react-native": "^0.73.0",

@@ -4,6 +4,7 @@ import android.app.Application
 import com.facebook.react.ReactApplication
 import com.facebook.react.ReactNativeHost
 import com.facebook.react.ReactPackage
+import com.facebook.react.shell.MainReactPackage
 import com.facebook.soloader.SoLoader
 
 class MainApplication : Application(), ReactApplication {
@@ -12,6 +13,7 @@ class MainApplication : Application(), ReactApplication {
         override fun getUseDeveloperSupport(): Boolean = false
 
         override fun getPackages(): List<ReactPackage> = listOf(
+            MainReactPackage(),
             OffgridPackage()
         )
 
